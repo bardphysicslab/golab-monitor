@@ -399,6 +399,7 @@ def dashboard():
             </p>
 
             <div id="confirm" class="small muted">No action yet.</div>
+            <div id="last_update" class="small muted" style="margin-top:6px;"></div>
           </div>
 
           <div class="graph-card">
@@ -428,6 +429,7 @@ def dashboard():
             let chart0p3 = null;
             let chart5p0 = null;
             let pollInterval = null;
+            let wasRunning = false;
 
             function initializeCharts() {{
               const s = getSettings();
@@ -735,9 +737,47 @@ def dashboard():
               }}
             }}
 
-            loadThresholds();
+            async function pollState() {{
+              try {{
+                const r = await fetch("/state");
+                const j = await r.json();
+
+                const editingIds = ["sample_time_s","hold_time_s","samples","threshold_0p3","threshold_5p0"];
+                const userEditing = editingIds.includes(document.activeElement?.id);
+                if (!userEditing) {{
+                  document.getElementById("sample_time_s").value = j.settings.sample_time_s;
+                  document.getElementById("hold_time_s").value = j.settings.hold_time_s;
+                  document.getElementById("samples").value = j.settings.samples;
+                  document.getElementById("threshold_0p3").value = j.thresholds.threshold_0p3;
+                  document.getElementById("threshold_5p0").value = j.thresholds.threshold_5p0;
+                }}
+
+                const c = document.getElementById("confirm");
+                if (j.run_active) {{
+                  c.className = "small ok";
+                  c.textContent = `Running — ${{j.received_samples}} / ${{j.target_samples}} samples`;
+                  if (!wasRunning) {{
+                    sessionStartTime = null;
+                    startGraphPolling();
+                  }}
+                }} else {{
+                  if (wasRunning) {{
+                    c.className = "small muted";
+                    c.textContent = "Run complete.";
+                    stopGraphPolling();
+                  }}
+                }}
+                wasRunning = j.run_active;
+                const ts = new Date(j.last_update * 1000).toLocaleTimeString();
+                document.getElementById("last_update").textContent = `State as of ${{ts}}`;
+                console.debug("[state]", ts, j);
+              }} catch (e) {{}}
+            }}
+
             initializeCharts();
             setInterval(pollLatest, 1000);
+            setInterval(pollState, 2000);
+            pollState();
             pollLatest();
         </script>
     </body>
@@ -882,6 +922,19 @@ def status():
         "received_samples": gt.received_samples,
         "target_samples": gt.target_samples,
         "reader_running": gt.reader_running,
+    })
+
+@app.get("/state")
+def get_state():
+    with thresholds_lock:
+        t = {"threshold_0p3": thresholds.threshold_0p3, "threshold_5p0": thresholds.threshold_5p0}
+    return JSONResponse({
+        "run_active": gt.run_active,
+        "received_samples": gt.received_samples,
+        "target_samples": gt.target_samples,
+        "settings": current_settings.dict(),
+        "thresholds": t,
+        "last_update": time.time(),
     })
 
 # =========================
