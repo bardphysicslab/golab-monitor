@@ -13,9 +13,10 @@ Current deployment status:
 - App is currently served by uvicorn on `0.0.0.0:8000`
 
 ## Important paths
-- Project root: `~/labdash`
-- Virtual environment: `~/labdash/venv`
-- App entry point: `main:app`
+- Project root: `~/golab-monitor`
+- App source: `~/golab-monitor/raspi`
+- Virtual environment: `~/golab-monitor/venv`
+- App entry point: `main:app` (in `raspi/main.py`)
 - Systemd service file: `/etc/systemd/system/labdash.service`
 
 ## Current service behavior
@@ -27,3 +28,9 @@ systemctl status labdash --no-pager
 journalctl -u labdash -n 100 --no-pager
 journalctl -u labdash -f
 ```
+
+## Repo structure
+- `raspi/` — FastAPI app running on the Pi
+- `arduino/` — Arduino sensor node firmware and protocol docs
+- `venv/` — Python virtual environment (not committed)
+- `CLAUDE.md` — this file
