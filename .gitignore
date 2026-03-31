@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 *.pyo
 venv/
+main.py.save
+.DS_Store
