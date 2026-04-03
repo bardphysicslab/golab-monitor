@@ -3,6 +3,8 @@ import time
 import threading
 import re
 import traceback
+import uuid
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Tuple, List
 
 import httpx
@@ -20,6 +22,8 @@ BAUD = 9600
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast?latitude=41.93&longitude=-73.91&current_weather=true"
 
+UID = "bb-0001"
+
 DEFAULT_LOCATION_LABEL = "GoLab"
 DEFAULT_LOCATION_ID = 1
 DEFAULT_SAMPLE_TIME_S = 10
@@ -33,8 +37,8 @@ app = FastAPI()
 # =========================
 
 class ThresholdSettings(BaseModel):
-    threshold_0p3: int = Field(default=1000, ge=1, le=999999)
-    threshold_5p0: int = Field(default=500, ge=1, le=999999)
+    threshold_c03: int = Field(default=1000, ge=1, le=999999)
+    threshold_c05: int = Field(default=500, ge=1, le=999999)
 
 thresholds = ThresholdSettings()
 thresholds_lock = threading.Lock()
@@ -56,10 +60,10 @@ current_settings = RunSettings()
 
 class SessionDataPoint(BaseModel):
     ts: str
-    count_0p3: int
-    count_5p0: int
-    exceeded_0p3: bool = False
-    exceeded_5p0: bool = False
+    c03: int
+    c05: int
+    exceeded_c03: bool = False
+    exceeded_c05: bool = False
 
 session_data: List[SessionDataPoint] = []
 session_lock = threading.Lock()
@@ -219,13 +223,13 @@ class GT521:
         out = {"ts": ts}
 
         if abs(size1 - 0.3) < 0.11:
-            out["count_0p3"] = cnt1
+            out["c03"] = cnt1
         if abs(size1 - 5.0) < 0.11:
-            out["count_5p0"] = cnt1
+            out["c05"] = cnt1
         if abs(size2 - 0.3) < 0.11:
-            out["count_0p3"] = cnt2
+            out["c03"] = cnt2
         if abs(size2 - 5.0) < 0.11:
-            out["count_5p0"] = cnt2
+            out["c05"] = cnt2
 
         return out
 
@@ -260,20 +264,32 @@ class GT521:
                             self.received_samples += 1
                             with latest_lock:
                                 global latest_reading
-                                latest_reading = parsed
+                                latest_reading = {
+                                    "uid": UID,
+                                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                    "status": "ok",
+                                    "data": {
+                                        "c03": parsed.get("c03"),
+                                        "c05": parsed.get("c05"),
+                                    },
+                                    "extended": {
+                                        "device_ts": parsed.get("ts"),
+                                    },
+                                    "raw": None,
+                                }
 
                             # Append to session data with threshold check
                             with session_lock:
                                 with thresholds_lock:
-                                    exceeded_0p3 = parsed.get("count_0p3", 0) > thresholds.threshold_0p3
-                                    exceeded_5p0 = parsed.get("count_5p0", 0) > thresholds.threshold_5p0
-                                
+                                    exceeded_c03 = parsed.get("c03", 0) > thresholds.threshold_c03
+                                    exceeded_c05 = parsed.get("c05", 0) > thresholds.threshold_c05
+
                                 dp = SessionDataPoint(
                                     ts=parsed["ts"],
-                                    count_0p3=parsed.get("count_0p3", 0),
-                                    count_5p0=parsed.get("count_5p0", 0),
-                                    exceeded_0p3=exceeded_0p3,
-                                    exceeded_5p0=exceeded_5p0,
+                                    c03=parsed.get("c03", 0),
+                                    c05=parsed.get("c05", 0),
+                                    exceeded_c03=exceeded_c03,
+                                    exceeded_c05=exceeded_c05,
                                 )
                                 session_data.append(dp)
 
@@ -383,11 +399,11 @@ def dashboard():
 
             <h4 style="margin-top: 20px; margin-bottom: 15px; border-top: 1px solid #ddd; padding-top: 15px;">Threshold Settings</h4>
 
-            <label>0.3µm Threshold (particles/cm³)</label>
-            <input id="threshold_0p3" type="number" value="1000" min="1" max="999999"/>
+            <label>0.3µm Threshold (count/ft³)</label>
+            <input id="threshold_c03" type="number" value="1000" min="1" max="999999"/>
 
-            <label>5.0µm Threshold (particles/cm³)</label>
-            <input id="threshold_5p0" type="number" value="500" min="1" max="999999"/>
+            <label>0.5µm Threshold (count/ft³)</label>
+            <input id="threshold_c05" type="number" value="500" min="1" max="999999"/>
 
             <p class="muted small" style="margin-top:12px;">
               Start applies settings to the GT, then begins sampling.
@@ -404,39 +420,39 @@ def dashboard():
           <div class="graph-card">
             <div class="graph-title">0.3µm Particles</div>
             <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
-              <span id="current_0p3">—</span> <span style="font-size: 16px; color: #666;">particles/cm³</span>
+              <span id="current_c03">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
             </div>
             <div class="graph-container">
-              <canvas id="chart-0p3"></canvas>
+              <canvas id="chart-c03"></canvas>
             </div>
-            <div id="status-0p3" class="threshold-status safe">✓ Below Threshold</div>
+            <div id="status-c03" class="threshold-status safe">✓ Below Threshold</div>
           </div>
 
           <div class="graph-card">
-            <div class="graph-title">5.0µm Particles</div>
+            <div class="graph-title">0.5µm Particles</div>
             <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
-              <span id="current_5p0">—</span> <span style="font-size: 16px; color: #666;">particles/cm³</span>
+              <span id="current_c05">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
             </div>
             <div class="graph-container">
-              <canvas id="chart-5p0"></canvas>
+              <canvas id="chart-c05"></canvas>
             </div>
-            <div id="status-5p0" class="threshold-status safe">✓ Below Threshold</div>
+            <div id="status-c05" class="threshold-status safe">✓ Below Threshold</div>
           </div>
         </div>
 
         <script>
-            let chart0p3 = null;
-            let chart5p0 = null;
+            let chartC03 = null;
+            let chartC05 = null;
             let pollInterval = null;
 
             function initializeCharts() {{
               const s = getSettings();
               const sessionDurationSeconds = (s.sample_time_s + s.hold_time_s) * s.samples;
-              const t0p3 = parseInt(document.getElementById("threshold_0p3").value);
-              const t5p0 = parseInt(document.getElementById("threshold_5p0").value);
-              
-              createOrUpdateChart("chart-0p3", [], t0p3, sessionDurationSeconds);
-              createOrUpdateChart("chart-5p0", [], t5p0, sessionDurationSeconds);
+              const tC03 = parseInt(document.getElementById("threshold_c03").value);
+              const tC05 = parseInt(document.getElementById("threshold_c05").value);
+
+              createOrUpdateChart("chart-c03", [], tC03, sessionDurationSeconds);
+              createOrUpdateChart("chart-c05", [], tC05, sessionDurationSeconds);
             }}
 
             function getSettings() {{
@@ -449,8 +465,8 @@ def dashboard():
 
             function getThresholds() {{
               return {{
-                threshold_0p3: parseInt(document.getElementById("threshold_0p3").value),
-                threshold_5p0: parseInt(document.getElementById("threshold_5p0").value),
+                threshold_c03: parseInt(document.getElementById("threshold_c03").value),
+                threshold_c05: parseInt(document.getElementById("threshold_c05").value),
               }};
             }}
 
@@ -478,8 +494,8 @@ def dashboard():
               try {{
                 const r = await fetch("/gt/thresholds");
                 const j = await r.json();
-                if (j.threshold_0p3) document.getElementById("threshold_0p3").value = j.threshold_0p3;
-                if (j.threshold_5p0) document.getElementById("threshold_5p0").value = j.threshold_5p0;
+                if (j.threshold_c03) document.getElementById("threshold_c03").value = j.threshold_c03;
+                if (j.threshold_c05) document.getElementById("threshold_c05").value = j.threshold_c05;
               }} catch (e) {{
                 console.error("Failed to load thresholds:", e);
               }}
@@ -556,8 +572,8 @@ def dashboard():
                 const r = await fetch("/gt/latest");
                 const j = await r.json();
                 if (j && j.latest) {{
-                  document.getElementById("current_0p3").textContent = (j.latest.count_0p3 ?? "—").toString();
-                  document.getElementById("current_5p0").textContent = (j.latest.count_5p0 ?? "—").toString();
+                  document.getElementById("current_c03").textContent = (j.latest.c03 ?? "—").toString();
+                  document.getElementById("current_c05").textContent = (j.latest.c05 ?? "—").toString();
                 }}
               }} catch (e) {{}}
             }}
@@ -599,8 +615,8 @@ def dashboard():
               const dataPoints = [];
               data.forEach(d => {{
                 const elapsed = getElapsedSeconds(d.ts);
-                const count = canvasId === "chart-0p3" ? d.count_0p3 : d.count_5p0;
-                const exceeded = canvasId === "chart-0p3" ? d.exceeded_0p3 : d.exceeded_5p0;
+                const count = canvasId === "chart-c03" ? d.c03 : d.c05;
+                const exceeded = canvasId === "chart-c03" ? d.exceeded_c03 : d.exceeded_c05;
                 
                 if (count !== undefined && count !== null && elapsed <= sessionDurationSeconds) {{
                   dataPoints.push({{
@@ -611,8 +627,8 @@ def dashboard():
                 }}
               }});
 
-              const chartId = canvasId === "chart-0p3" ? 0 : 1;
-              const existingChart = chartId === 0 ? chart0p3 : chart5p0;
+              const chartId = canvasId === "chart-c03" ? 0 : 1;
+              const existingChart = chartId === 0 ? chartC03 : chartC05;
 
               const thresholdData = [
                 {{ x: 0, y: threshold }},
@@ -661,7 +677,7 @@ def dashboard():
                   scales: {{
                     y: {{
                       type: "logarithmic",
-                      title: {{ display: true, text: "Particles/cm³ (log scale)" }},
+                      title: {{ display: true, text: "count/ft³ (log scale)" }},
                       min: 1,
                       max: 3000000,
                     }},
@@ -689,9 +705,9 @@ def dashboard():
 
               const newChart = new Chart(ctx, chartConfig);
               if (chartId === 0) {{
-                chart0p3 = newChart;
+                chartC03 = newChart;
               }} else {{
-                chart5p0 = newChart;
+                chartC05 = newChart;
               }}
 
               return newChart;
@@ -707,24 +723,24 @@ def dashboard():
 
                 const s = getSettings();
                 const sessionDurationSeconds = (s.sample_time_s + s.hold_time_s) * s.samples;
-                const t0p3 = parseInt(document.getElementById("threshold_0p3").value);
-                const t5p0 = parseInt(document.getElementById("threshold_5p0").value);
+                const tC03 = parseInt(document.getElementById("threshold_c03").value);
+                const tC05 = parseInt(document.getElementById("threshold_c05").value);
 
-                createOrUpdateChart("chart-0p3", data, t0p3, sessionDurationSeconds);
-                createOrUpdateChart("chart-5p0", data, t5p0, sessionDurationSeconds);
+                createOrUpdateChart("chart-c03", data, tC03, sessionDurationSeconds);
+                createOrUpdateChart("chart-c05", data, tC05, sessionDurationSeconds);
 
                 const last = data[data.length - 1];
-                const s0p3 = document.getElementById("status-0p3");
-                const s5p0 = document.getElementById("status-5p0");
+                const sC03 = document.getElementById("status-c03");
+                const sC05 = document.getElementById("status-c05");
 
-                s0p3.className = last.exceeded_0p3 ? "threshold-status exceeded" : "threshold-status safe";
-                s0p3.textContent = last.exceeded_0p3 ? "⚠ EXCEEDED" : "✓ Below Threshold";
+                sC03.className = last.exceeded_c03 ? "threshold-status exceeded" : "threshold-status safe";
+                sC03.textContent = last.exceeded_c03 ? "⚠ EXCEEDED" : "✓ Below Threshold";
 
-                s5p0.className = last.exceeded_5p0 ? "threshold-status exceeded" : "threshold-status safe";
-                s5p0.textContent = last.exceeded_5p0 ? "⚠ EXCEEDED" : "✓ Below Threshold";
-                
-                document.getElementById("current_0p3").textContent = (last.count_0p3 ?? "—").toString();
-                document.getElementById("current_5p0").textContent = (last.count_5p0 ?? "—").toString();
+                sC05.className = last.exceeded_c05 ? "threshold-status exceeded" : "threshold-status safe";
+                sC05.textContent = last.exceeded_c05 ? "⚠ EXCEEDED" : "✓ Below Threshold";
+
+                document.getElementById("current_c03").textContent = (last.c03 ?? "—").toString();
+                document.getElementById("current_c05").textContent = (last.c05 ?? "—").toString();
               }}, 1000);
             }}
 
@@ -852,6 +868,8 @@ def stop():
 @app.get("/gt/latest")
 def get_latest():
     with latest_lock:
+        if latest_reading is None:
+            return JSONResponse({"latest": None})
         return JSONResponse({"latest": latest_reading})
 
 @app.get("/gt/session-data")
@@ -864,8 +882,8 @@ def get_session_data():
 def get_thresholds():
     with thresholds_lock:
         return JSONResponse({
-            "threshold_0p3": thresholds.threshold_0p3,
-            "threshold_5p0": thresholds.threshold_5p0,
+            "threshold_c03": thresholds.threshold_c03,
+            "threshold_c05": thresholds.threshold_c05,
         })
 
 @app.post("/gt/thresholds")
