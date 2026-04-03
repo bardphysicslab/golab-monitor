@@ -272,6 +272,7 @@ class GT521:
     def set_hold_time(self, sec: int):      return self.send_line(f"SH {sec:04d}".encode(), read_seconds=0.9)
     def set_samples(self, n: int):          return self.send_line(f"SN {n:03d}".encode(), read_seconds=0.9)
     def set_report_csv(self):               return self.send_line(b"SR 1", read_seconds=0.9)
+    def set_count_units_m3(self):           return self.send_line(b"CU 3", read_seconds=0.9)
 
     def read_settings_report(self) -> Tuple[bool, str]:
         ok, raw = self.send_line(b"1", read_seconds=2.0)
@@ -482,11 +483,19 @@ def dashboard():
 
             <h4 style="margin-top: 20px; margin-bottom: 15px; border-top: 1px solid #ddd; padding-top: 15px;">Threshold Settings</h4>
 
+<<<<<<< HEAD:main.py
             <label>0.3µm Threshold (count/ft³)</label>
             <input id="threshold_c03" type="number" value="1000" min="1" max="999999"/>
 
             <label>5.0µm Threshold (count/ft³)</label>
             <input id="threshold_c50" type="number" value="500" min="1" max="999999"/>
+=======
+            <label>0.3µm Threshold (particles/m³)</label>
+            <input id="threshold_0p3" type="number" value="1000" min="1" max="999999"/>
+
+            <label>5.0µm Threshold (particles/m³)</label>
+            <input id="threshold_5p0" type="number" value="500" min="1" max="999999"/>
+>>>>>>> origin/main:raspi/main.py
 
             <p class="muted small" style="margin-top:12px;">
               Start applies settings to the GT, then begins sampling.
@@ -498,12 +507,17 @@ def dashboard():
             </p>
 
             <div id="confirm" class="small muted">No action yet.</div>
+            <div id="last_update" class="small muted" style="margin-top:6px;"></div>
           </div>
 
           <div class="graph-card">
             <div class="graph-title">0.3µm Particles</div>
             <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
+<<<<<<< HEAD:main.py
               <span id="current_c03">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
+=======
+              <span id="current_0p3">—</span> <span style="font-size: 16px; color: #666;">particles/m³</span>
+>>>>>>> origin/main:raspi/main.py
             </div>
             <div class="graph-container">
               <canvas id="chart-c03"></canvas>
@@ -514,7 +528,11 @@ def dashboard():
           <div class="graph-card">
             <div class="graph-title">5.0µm Particles</div>
             <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
+<<<<<<< HEAD:main.py
               <span id="current_c50">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
+=======
+              <span id="current_5p0">—</span> <span style="font-size: 16px; color: #666;">particles/m³</span>
+>>>>>>> origin/main:raspi/main.py
             </div>
             <div class="graph-container">
               <canvas id="chart-c50"></canvas>
@@ -527,6 +545,7 @@ def dashboard():
             let chartC03 = null;
             let chartC50 = null;
             let pollInterval = null;
+            let wasRunning = false;
 
             function initializeCharts() {{
               const s = getSettings();
@@ -760,7 +779,11 @@ def dashboard():
                   scales: {{
                     y: {{
                       type: "logarithmic",
+<<<<<<< HEAD:main.py
                       title: {{ display: true, text: "count/ft³ (log scale)" }},
+=======
+                      title: {{ display: true, text: "Particles/m³ (log scale)" }},
+>>>>>>> origin/main:raspi/main.py
                       min: 1,
                       max: 3000000,
                     }},
@@ -834,9 +857,47 @@ def dashboard():
               }}
             }}
 
-            loadThresholds();
+            async function pollState() {{
+              try {{
+                const r = await fetch("/state");
+                const j = await r.json();
+
+                const editingIds = ["sample_time_s","hold_time_s","samples","threshold_0p3","threshold_5p0"];
+                const userEditing = editingIds.includes(document.activeElement?.id);
+                if (!userEditing) {{
+                  document.getElementById("sample_time_s").value = j.settings.sample_time_s;
+                  document.getElementById("hold_time_s").value = j.settings.hold_time_s;
+                  document.getElementById("samples").value = j.settings.samples;
+                  document.getElementById("threshold_0p3").value = j.thresholds.threshold_0p3;
+                  document.getElementById("threshold_5p0").value = j.thresholds.threshold_5p0;
+                }}
+
+                const c = document.getElementById("confirm");
+                if (j.run_active) {{
+                  c.className = "small ok";
+                  c.textContent = `Running — ${{j.received_samples}} / ${{j.target_samples}} samples`;
+                  if (!wasRunning) {{
+                    sessionStartTime = null;
+                    startGraphPolling();
+                  }}
+                }} else {{
+                  if (wasRunning) {{
+                    c.className = "small muted";
+                    c.textContent = "Run complete.";
+                    stopGraphPolling();
+                  }}
+                }}
+                wasRunning = j.run_active;
+                const ts = new Date(j.last_update * 1000).toLocaleTimeString();
+                document.getElementById("last_update").textContent = `State as of ${{ts}}`;
+                console.debug("[state]", ts, j);
+              }} catch (e) {{}}
+            }}
+
             initializeCharts();
             setInterval(pollLatest, 1000);
+            setInterval(pollState, 2000);
+            pollState();
             pollLatest();
         </script>
     </body>
@@ -872,6 +933,7 @@ def start(settings: RunSettings):
         gt.set_sample_time(settings.sample_time_s)
         gt.set_hold_time(settings.hold_time_s)
         gt.set_samples(settings.samples)
+        gt.set_count_units_m3()
 
         gt.set_report_csv()
 
@@ -982,6 +1044,19 @@ def status():
         "received_samples": gt.received_samples,
         "target_samples": gt.target_samples,
         "reader_running": gt.reader_running,
+    })
+
+@app.get("/state")
+def get_state():
+    with thresholds_lock:
+        t = {"threshold_0p3": thresholds.threshold_0p3, "threshold_5p0": thresholds.threshold_5p0}
+    return JSONResponse({
+        "run_active": gt.run_active,
+        "received_samples": gt.received_samples,
+        "target_samples": gt.target_samples,
+        "settings": current_settings.dict(),
+        "thresholds": t,
+        "last_update": time.time(),
     })
 
 # =========================
