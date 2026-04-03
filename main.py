@@ -65,8 +65,92 @@ class SessionDataPoint(BaseModel):
     exceeded_c03: bool = False
     exceeded_c05: bool = False
 
-session_data: List[SessionDataPoint] = []
-session_lock = threading.Lock()
+
+class SessionManager:
+    """
+    Manages a single run session.
+
+    Each call to start() creates a new session with a unique session_id.
+    Session IDs are never reused. The session object tracks:
+      uid         — device uid
+      session_id  — unique run identifier (uuid4)
+      status      — "idle" | "running" | "complete" | "error"
+      start_time  — ISO 8601 UTC when the run began
+      end_time    — ISO 8601 UTC when the run ended (None while running)
+      metadata    — run settings used for this session
+      summary     — populated on completion (sample count, etc.)
+      data        — list of SessionDataPoint collected during the run
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self._session: Dict[str, Any] = self._empty_session()
+
+    @staticmethod
+    def _empty_session() -> Dict[str, Any]:
+        return {
+            "uid": UID,
+            "session_id": None,
+            "status": "idle",
+            "start_time": None,
+            "end_time": None,
+            "metadata": {},
+            "summary": {},
+            "data": [],
+        }
+
+    def start(self, metadata: Dict[str, Any]) -> str:
+        """Begin a new session. Returns the new session_id."""
+        with self.lock:
+            session_id = str(uuid.uuid4())
+            self._session = {
+                "uid": UID,
+                "session_id": session_id,
+                "status": "running",
+                "start_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_time": None,
+                "metadata": metadata,
+                "summary": {},
+                "data": [],
+            }
+            return session_id
+
+    def append(self, point: SessionDataPoint) -> None:
+        with self.lock:
+            self._session["data"].append(point)
+
+    def complete(self) -> None:
+        with self.lock:
+            self._session["status"] = "complete"
+            self._session["end_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            self._session["summary"] = {
+                "total_samples": len(self._session["data"]),
+            }
+
+    def error(self, reason: str) -> None:
+        with self.lock:
+            self._session["status"] = "error"
+            self._session["end_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            self._session["summary"] = {"error": reason}
+
+    def get_data(self) -> List[SessionDataPoint]:
+        with self.lock:
+            return list(self._session["data"])
+
+    def get_session(self) -> Dict[str, Any]:
+        with self.lock:
+            s = dict(self._session)
+            s["data"] = [dp.dict() for dp in s["data"]]
+            return s
+
+    def clear(self) -> None:
+        with self.lock:
+            self._session = self._empty_session()
+
+
+session_manager = SessionManager()
+# Legacy alias — used by the reader loop and endpoints below
+session_lock = session_manager.lock
 
 # =========================
 # LATEST READING (in-memory)
@@ -279,19 +363,18 @@ class GT521:
                                 }
 
                             # Append to session data with threshold check
-                            with session_lock:
-                                with thresholds_lock:
-                                    exceeded_c03 = parsed.get("c03", 0) > thresholds.threshold_c03
-                                    exceeded_c05 = parsed.get("c05", 0) > thresholds.threshold_c05
+                            with thresholds_lock:
+                                exceeded_c03 = parsed.get("c03", 0) > thresholds.threshold_c03
+                                exceeded_c05 = parsed.get("c05", 0) > thresholds.threshold_c05
 
-                                dp = SessionDataPoint(
-                                    ts=parsed["ts"],
-                                    c03=parsed.get("c03", 0),
-                                    c05=parsed.get("c05", 0),
-                                    exceeded_c03=exceeded_c03,
-                                    exceeded_c05=exceeded_c05,
-                                )
-                                session_data.append(dp)
+                            dp = SessionDataPoint(
+                                ts=parsed["ts"],
+                                c03=parsed.get("c03", 0),
+                                c05=parsed.get("c05", 0),
+                                exceeded_c03=exceeded_c03,
+                                exceeded_c05=exceeded_c05,
+                            )
+                            session_manager.append(dp)
 
                             if (
                                 self.run_active
@@ -768,11 +851,7 @@ def dashboard():
 def start(settings: RunSettings):
     global current_settings
     current_settings = settings
-    applied_at = time.strftime("%Y-%m-%d %H:%M:%S")
-
-    with session_lock:
-        global session_data
-        session_data.clear()
+    applied_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     wanted = {
         "sample_time_s": settings.sample_time_s,
@@ -812,10 +891,11 @@ def start(settings: RunSettings):
         gt.run_active = True
         gt.ensure_reader()
 
-        ok = True
+        session_id = session_manager.start(metadata=wanted)
 
         return JSONResponse({
-            "ok": ok,
+            "ok": True,
+            "session_id": session_id,
             "applied_at": applied_at,
             "requested": wanted,
             "applied": applied,
@@ -828,6 +908,7 @@ def start(settings: RunSettings):
         gt.run_active = False
         gt.target_samples = 0
         gt.received_samples = 0
+        session_manager.error(str(e))
 
         return JSONResponse({
             "ok": False,
@@ -840,7 +921,7 @@ def start(settings: RunSettings):
 
 @app.post("/gt/stop")
 def stop():
-    at = time.strftime("%Y-%m-%d %H:%M:%S")
+    at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     gt.open()
 
@@ -863,6 +944,8 @@ def stop():
             break
         time.sleep(0.3)
 
+    session_manager.complete()
+
     return JSONResponse({"ok": stopped, "at": at})
 
 @app.get("/gt/latest")
@@ -874,9 +957,8 @@ def get_latest():
 
 @app.get("/gt/session-data")
 def get_session_data():
-    with session_lock:
-        data = [dp.dict() for dp in session_data]
-    return JSONResponse({"data": data})
+    data = session_manager.get_data()
+    return JSONResponse({"data": [dp.dict() for dp in data]})
 
 @app.get("/gt/thresholds")
 def get_thresholds():
