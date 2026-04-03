@@ -38,7 +38,7 @@ app = FastAPI()
 
 class ThresholdSettings(BaseModel):
     threshold_c03: int = Field(default=1000, ge=1, le=999999)
-    threshold_c05: int = Field(default=500, ge=1, le=999999)
+    threshold_c50: int = Field(default=500, ge=1, le=999999)
 
 thresholds = ThresholdSettings()
 thresholds_lock = threading.Lock()
@@ -61,9 +61,9 @@ current_settings = RunSettings()
 class SessionDataPoint(BaseModel):
     ts: str
     c03: int
-    c05: int
+    c50: int
     exceeded_c03: bool = False
-    exceeded_c05: bool = False
+    exceeded_c50: bool = False
 
 
 class SessionManager:
@@ -309,11 +309,11 @@ class GT521:
         if abs(size1 - 0.3) < 0.11:
             out["c03"] = cnt1
         if abs(size1 - 5.0) < 0.11:
-            out["c05"] = cnt1
+            out["c50"] = cnt1
         if abs(size2 - 0.3) < 0.11:
             out["c03"] = cnt2
         if abs(size2 - 5.0) < 0.11:
-            out["c05"] = cnt2
+            out["c50"] = cnt2
 
         return out
 
@@ -354,7 +354,7 @@ class GT521:
                                     "status": "ok",
                                     "data": {
                                         "c03": parsed.get("c03"),
-                                        "c05": parsed.get("c05"),
+                                        "c50": parsed.get("c50"),
                                     },
                                     "extended": {
                                         "device_ts": parsed.get("ts"),
@@ -365,14 +365,14 @@ class GT521:
                             # Append to session data with threshold check
                             with thresholds_lock:
                                 exceeded_c03 = parsed.get("c03", 0) > thresholds.threshold_c03
-                                exceeded_c05 = parsed.get("c05", 0) > thresholds.threshold_c05
+                                exceeded_c50 = parsed.get("c50", 0) > thresholds.threshold_c50
 
                             dp = SessionDataPoint(
                                 ts=parsed["ts"],
                                 c03=parsed.get("c03", 0),
-                                c05=parsed.get("c05", 0),
+                                c50=parsed.get("c50", 0),
                                 exceeded_c03=exceeded_c03,
-                                exceeded_c05=exceeded_c05,
+                                exceeded_c50=exceeded_c50,
                             )
                             session_manager.append(dp)
 
@@ -485,8 +485,8 @@ def dashboard():
             <label>0.3µm Threshold (count/ft³)</label>
             <input id="threshold_c03" type="number" value="1000" min="1" max="999999"/>
 
-            <label>0.5µm Threshold (count/ft³)</label>
-            <input id="threshold_c05" type="number" value="500" min="1" max="999999"/>
+            <label>5.0µm Threshold (count/ft³)</label>
+            <input id="threshold_c50" type="number" value="500" min="1" max="999999"/>
 
             <p class="muted small" style="margin-top:12px;">
               Start applies settings to the GT, then begins sampling.
@@ -512,30 +512,30 @@ def dashboard():
           </div>
 
           <div class="graph-card">
-            <div class="graph-title">0.5µm Particles</div>
+            <div class="graph-title">5.0µm Particles</div>
             <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
-              <span id="current_c05">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
+              <span id="current_c50">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
             </div>
             <div class="graph-container">
-              <canvas id="chart-c05"></canvas>
+              <canvas id="chart-c50"></canvas>
             </div>
-            <div id="status-c05" class="threshold-status safe">✓ Below Threshold</div>
+            <div id="status-c50" class="threshold-status safe">✓ Below Threshold</div>
           </div>
         </div>
 
         <script>
             let chartC03 = null;
-            let chartC05 = null;
+            let chartC50 = null;
             let pollInterval = null;
 
             function initializeCharts() {{
               const s = getSettings();
               const sessionDurationSeconds = (s.sample_time_s + s.hold_time_s) * s.samples;
               const tC03 = parseInt(document.getElementById("threshold_c03").value);
-              const tC05 = parseInt(document.getElementById("threshold_c05").value);
+              const tC50 = parseInt(document.getElementById("threshold_c50").value);
 
               createOrUpdateChart("chart-c03", [], tC03, sessionDurationSeconds);
-              createOrUpdateChart("chart-c05", [], tC05, sessionDurationSeconds);
+              createOrUpdateChart("chart-c50", [], tC50, sessionDurationSeconds);
             }}
 
             function getSettings() {{
@@ -549,7 +549,7 @@ def dashboard():
             function getThresholds() {{
               return {{
                 threshold_c03: parseInt(document.getElementById("threshold_c03").value),
-                threshold_c05: parseInt(document.getElementById("threshold_c05").value),
+                threshold_c50: parseInt(document.getElementById("threshold_c50").value),
               }};
             }}
 
@@ -578,7 +578,7 @@ def dashboard():
                 const r = await fetch("/gt/thresholds");
                 const j = await r.json();
                 if (j.threshold_c03) document.getElementById("threshold_c03").value = j.threshold_c03;
-                if (j.threshold_c05) document.getElementById("threshold_c05").value = j.threshold_c05;
+                if (j.threshold_c50) document.getElementById("threshold_c50").value = j.threshold_c50;
               }} catch (e) {{
                 console.error("Failed to load thresholds:", e);
               }}
@@ -656,7 +656,7 @@ def dashboard():
                 const j = await r.json();
                 if (j && j.latest) {{
                   document.getElementById("current_c03").textContent = (j.latest.c03 ?? "—").toString();
-                  document.getElementById("current_c05").textContent = (j.latest.c05 ?? "—").toString();
+                  document.getElementById("current_c50").textContent = (j.latest.c50 ?? "—").toString();
                 }}
               }} catch (e) {{}}
             }}
@@ -698,8 +698,8 @@ def dashboard():
               const dataPoints = [];
               data.forEach(d => {{
                 const elapsed = getElapsedSeconds(d.ts);
-                const count = canvasId === "chart-c03" ? d.c03 : d.c05;
-                const exceeded = canvasId === "chart-c03" ? d.exceeded_c03 : d.exceeded_c05;
+                const count = canvasId === "chart-c03" ? d.c03 : d.c50;
+                const exceeded = canvasId === "chart-c03" ? d.exceeded_c03 : d.exceeded_c50;
                 
                 if (count !== undefined && count !== null && elapsed <= sessionDurationSeconds) {{
                   dataPoints.push({{
@@ -711,7 +711,7 @@ def dashboard():
               }});
 
               const chartId = canvasId === "chart-c03" ? 0 : 1;
-              const existingChart = chartId === 0 ? chartC03 : chartC05;
+              const existingChart = chartId === 0 ? chartC03 : chartC50;
 
               const thresholdData = [
                 {{ x: 0, y: threshold }},
@@ -790,7 +790,7 @@ def dashboard():
               if (chartId === 0) {{
                 chartC03 = newChart;
               }} else {{
-                chartC05 = newChart;
+                chartC50 = newChart;
               }}
 
               return newChart;
@@ -807,23 +807,23 @@ def dashboard():
                 const s = getSettings();
                 const sessionDurationSeconds = (s.sample_time_s + s.hold_time_s) * s.samples;
                 const tC03 = parseInt(document.getElementById("threshold_c03").value);
-                const tC05 = parseInt(document.getElementById("threshold_c05").value);
+                const tC50 = parseInt(document.getElementById("threshold_c50").value);
 
                 createOrUpdateChart("chart-c03", data, tC03, sessionDurationSeconds);
-                createOrUpdateChart("chart-c05", data, tC05, sessionDurationSeconds);
+                createOrUpdateChart("chart-c50", data, tC50, sessionDurationSeconds);
 
                 const last = data[data.length - 1];
                 const sC03 = document.getElementById("status-c03");
-                const sC05 = document.getElementById("status-c05");
+                const sC50 = document.getElementById("status-c50");
 
                 sC03.className = last.exceeded_c03 ? "threshold-status exceeded" : "threshold-status safe";
                 sC03.textContent = last.exceeded_c03 ? "⚠ EXCEEDED" : "✓ Below Threshold";
 
-                sC05.className = last.exceeded_c05 ? "threshold-status exceeded" : "threshold-status safe";
-                sC05.textContent = last.exceeded_c05 ? "⚠ EXCEEDED" : "✓ Below Threshold";
+                sC50.className = last.exceeded_c50 ? "threshold-status exceeded" : "threshold-status safe";
+                sC50.textContent = last.exceeded_c50 ? "⚠ EXCEEDED" : "✓ Below Threshold";
 
                 document.getElementById("current_c03").textContent = (last.c03 ?? "—").toString();
-                document.getElementById("current_c05").textContent = (last.c05 ?? "—").toString();
+                document.getElementById("current_c50").textContent = (last.c50 ?? "—").toString();
               }}, 1000);
             }}
 
@@ -965,7 +965,7 @@ def get_thresholds():
     with thresholds_lock:
         return JSONResponse({
             "threshold_c03": thresholds.threshold_c03,
-            "threshold_c05": thresholds.threshold_c05,
+            "threshold_c50": thresholds.threshold_c50,
         })
 
 @app.post("/gt/thresholds")

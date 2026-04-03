@@ -2,7 +2,7 @@
 gt521s_driver.py
 Bard Box driver for the GT-521S optical particle counter.
 
-Channels : c03 (≥ 0.3 µm), c05 (second configured channel)
+Channels : c03 (≥ 0.3 µm), c50 (≥ 5.0 µm)
 Interface : USB serial via CP2102 (Silicon Labs)
 Baud rate : 9600
 Count units: count/ft³ (CU 0)
@@ -16,12 +16,6 @@ docs/pi-driver-instructions.md:
 All serial handshake and parsing logic is internal to this driver.
 The GT-521S streams CSV lines during a session; the driver buffers the
 latest parsed line and exposes it atomically via get_reading().
-
-NOTE — Channel naming:
-  The parser checks for particle sizes 0.3 µm (c03) and 5.0 µm (c05).
-  Per channel-names.md, 5.0 µm is canonically c50. The mapping to c05
-  follows the GoLab refactor specification. Confirm the actual sizes
-  configured on the device to verify the correct canonical channel name.
 """
 
 import re
@@ -109,7 +103,7 @@ class GT521SDriver:
             },
             "channels": {
                 "c03": {"label": "0.3 µm", "unit": "count/ft³"},
-                "c05": {"label": "0.5 µm", "unit": "count/ft³"},
+                "c50": {"label": "5.0 µm", "unit": "count/ft³"},
             },
             "sampling": {
                 "mode": "session",
@@ -139,7 +133,7 @@ class GT521SDriver:
                 "status": "ok",
                 "data": {
                     "c03": self._latest.get("c03"),
-                    "c05": self._latest.get("c05"),
+                    "c50": self._latest.get("c50"),
                 },
                 "extended": {
                     "device_ts": self._latest.get("_device_ts"),
@@ -265,7 +259,7 @@ class GT521SDriver:
         """
         Parse one CSV line from the GT-521S into a normalized channel dict.
 
-        Returns dict with keys c03, c05, _device_ts, _raw_line, or None.
+        Returns dict with keys c03, c50, _device_ts, _raw_line, or None.
         """
         line = line.strip()
         if not line:
@@ -299,13 +293,13 @@ class GT521SDriver:
         if abs(size1 - 0.3) < 0.11:
             out["c03"] = cnt1
         if abs(size1 - 5.0) < 0.11:
-            out["c05"] = cnt1
+            out["c50"] =cnt1
         if abs(size2 - 0.3) < 0.11:
             out["c03"] = cnt2
         if abs(size2 - 5.0) < 0.11:
-            out["c05"] = cnt2
+            out["c50"] =cnt2
 
-        if "c03" not in out and "c05" not in out:
+        if "c03" not in out and "c50" not in out:
             return None
 
         return out
