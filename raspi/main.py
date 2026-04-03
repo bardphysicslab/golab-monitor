@@ -483,19 +483,11 @@ def dashboard():
 
             <h4 style="margin-top: 20px; margin-bottom: 15px; border-top: 1px solid #ddd; padding-top: 15px;">Threshold Settings</h4>
 
-<<<<<<< HEAD:main.py
             <label>0.3µm Threshold (count/ft³)</label>
             <input id="threshold_c03" type="number" value="1000" min="1" max="999999"/>
 
             <label>5.0µm Threshold (count/ft³)</label>
             <input id="threshold_c50" type="number" value="500" min="1" max="999999"/>
-=======
-            <label>0.3µm Threshold (particles/m³)</label>
-            <input id="threshold_0p3" type="number" value="1000" min="1" max="999999"/>
-
-            <label>5.0µm Threshold (particles/m³)</label>
-            <input id="threshold_5p0" type="number" value="500" min="1" max="999999"/>
->>>>>>> origin/main:raspi/main.py
 
             <p class="muted small" style="margin-top:12px;">
               Start applies settings to the GT, then begins sampling.
@@ -513,11 +505,7 @@ def dashboard():
           <div class="graph-card">
             <div class="graph-title">0.3µm Particles</div>
             <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
-<<<<<<< HEAD:main.py
               <span id="current_c03">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
-=======
-              <span id="current_0p3">—</span> <span style="font-size: 16px; color: #666;">particles/m³</span>
->>>>>>> origin/main:raspi/main.py
             </div>
             <div class="graph-container">
               <canvas id="chart-c03"></canvas>
@@ -528,11 +516,7 @@ def dashboard():
           <div class="graph-card">
             <div class="graph-title">5.0µm Particles</div>
             <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
-<<<<<<< HEAD:main.py
               <span id="current_c50">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
-=======
-              <span id="current_5p0">—</span> <span style="font-size: 16px; color: #666;">particles/m³</span>
->>>>>>> origin/main:raspi/main.py
             </div>
             <div class="graph-container">
               <canvas id="chart-c50"></canvas>
@@ -779,11 +763,7 @@ def dashboard():
                   scales: {{
                     y: {{
                       type: "logarithmic",
-<<<<<<< HEAD:main.py
                       title: {{ display: true, text: "count/ft³ (log scale)" }},
-=======
-                      title: {{ display: true, text: "Particles/m³ (log scale)" }},
->>>>>>> origin/main:raspi/main.py
                       min: 1,
                       max: 3000000,
                     }},
@@ -862,14 +842,14 @@ def dashboard():
                 const r = await fetch("/state");
                 const j = await r.json();
 
-                const editingIds = ["sample_time_s","hold_time_s","samples","threshold_0p3","threshold_5p0"];
+                const editingIds = ["sample_time_s","hold_time_s","samples","threshold_c03","threshold_c50"];
                 const userEditing = editingIds.includes(document.activeElement?.id);
                 if (!userEditing) {{
                   document.getElementById("sample_time_s").value = j.settings.sample_time_s;
                   document.getElementById("hold_time_s").value = j.settings.hold_time_s;
                   document.getElementById("samples").value = j.settings.samples;
-                  document.getElementById("threshold_0p3").value = j.thresholds.threshold_0p3;
-                  document.getElementById("threshold_5p0").value = j.thresholds.threshold_5p0;
+                  document.getElementById("threshold_c03").value = j.thresholds.threshold_c03;
+                  document.getElementById("threshold_c50").value = j.thresholds.threshold_c50;
                 }}
 
                 const c = document.getElementById("confirm");
@@ -1049,7 +1029,7 @@ def status():
 @app.get("/state")
 def get_state():
     with thresholds_lock:
-        t = {"threshold_0p3": thresholds.threshold_0p3, "threshold_5p0": thresholds.threshold_5p0}
+        t = {"threshold_c03": thresholds.threshold_c03, "threshold_c50": thresholds.threshold_c50}
     return JSONResponse({
         "run_active": gt.run_active,
         "received_samples": gt.received_samples,
