@@ -409,6 +409,20 @@ class GT521:
     def stop_reader(self):
         self.reader_stop.set()
 
+    def wake(self):
+        if not self.ser:
+            return
+        self.ser.reset_input_buffer()
+        self.ser.reset_output_buffer()
+        for _ in range(10):
+            self.ser.write(b"\r")
+            self.ser.flush()
+            time.sleep(0.2)
+            data = self.ser.read_all().decode(errors="ignore")
+            if data.strip():
+                return
+        raise RuntimeError("GT not responding")
+
 gt = GT521()
 
 # =========================
@@ -658,8 +672,8 @@ def dashboard():
                 const r = await fetch("/gt/latest");
                 const j = await r.json();
                 if (j && j.latest) {{
-                  document.getElementById("current_c03").textContent = (j.latest.c03 ?? "—").toString();
-                  document.getElementById("current_c50").textContent = (j.latest.c50 ?? "—").toString();
+                  document.getElementById("current_c03").textContent = (j.latest.data?.c03 ?? "—").toString();
+                  document.getElementById("current_c50").textContent = (j.latest.data?.c50 ?? "—").toString();
                 }}
               }} catch (e) {{}}
             }}
@@ -902,6 +916,7 @@ def start(settings: RunSettings):
 
     try:
         gt.open()
+        gt.wake()
         gt.stop_reader()
         if gt.reader_thread and gt.reader_thread.is_alive():
             gt.reader_thread.join(timeout=1.0)
@@ -927,6 +942,7 @@ def start(settings: RunSettings):
         }
 
         gt.start()
+        gt.op_status()  # verify device started (expect "R" in response)
 
         gt.target_samples = settings.samples
         gt.received_samples = 0
