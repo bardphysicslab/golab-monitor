@@ -643,7 +643,7 @@ def start(settings: RunSettings):
             exceeded_c03 = parsed.get("c03", 0) > thresholds.threshold_c03
             exceeded_c50 = parsed.get("c50", 0) > thresholds.threshold_c50
         dp = SessionDataPoint(
-            ts=parsed.get("_device_ts", ""),
+            ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             c03=parsed.get("c03", 0),
             c50=parsed.get("c50", 0),
             exceeded_c03=exceeded_c03,

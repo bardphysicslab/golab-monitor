@@ -524,7 +524,10 @@ class GT521SDriver:
                                 self._latest = parsed
                             if self._on_sample is not None:
                                 try:
-                                    self._on_sample(parsed)
+                                    self._on_sample({
+                                        "c03": parsed.get("c03"),
+                                        "c50": parsed.get("c50"),
+                                    })
                                 except Exception:
                                     log.exception("GT: on_sample callback raised")
                             if (
