@@ -1,17 +1,25 @@
 import asyncio
+import logging
+import sys
 import time
 import threading
-import re
-import traceback
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, List
 
 import httpx
-import serial
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+
+from gt521s_driver import GT521SDriver
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+    stream=sys.stdout,
+)
+log = logging.getLogger(__name__)
 
 # =========================
 # CONFIG
@@ -149,296 +157,12 @@ class SessionManager:
 
 
 session_manager = SessionManager()
-# Legacy alias — used by the reader loop and endpoints below
-session_lock = session_manager.lock
 
 # =========================
-# LATEST READING (in-memory)
+# GT-521S DRIVER
 # =========================
 
-latest_lock = threading.Lock()
-latest_reading: Optional[Dict[str, Any]] = None
-
-# =========================
-# GT-521S CONTROLLER (ORIGINAL - UNCHANGED)
-# =========================
-
-class GT521:
-    def __init__(self):
-        self.ser: Optional[serial.Serial] = None
-        self.lock = threading.Lock()
-
-        self.reader_thread: Optional[threading.Thread] = None
-        self.reader_stop = threading.Event()
-        self.reader_running = False
-
-        self.run_active = False
-        self.target_samples = 0
-        self.received_samples = 0
-
-    def open(self):
-        if self.ser and self.ser.is_open:
-            return
-
-        self.ser = serial.Serial(
-            PORT,
-            BAUD,
-            timeout=0,   # non-blocking
-            xonxoff=False,
-            rtscts=False,
-            dsrdtr=False,
-        )
-
-        try:
-            self.ser.dtr = True
-            self.ser.rts = True
-        except Exception:
-            pass
-
-        time.sleep(1.0)
-        try:
-            self.ser.reset_input_buffer()
-        except Exception:
-            pass
-
-    def _read_for(self, seconds=1.0) -> bytes:
-        end = time.time() + seconds
-        out = b""
-        while time.time() < end:
-            n = self.ser.in_waiting if self.ser else 0
-            if n:
-                out += self.ser.read(n)
-            else:
-                time.sleep(0.02)
-        return out
-
-    def _poke_until_star(self) -> bytes:
-        seen = b""
-        if not self.ser:
-            return seen
-        for _ in range(12):
-            self.ser.write(b"\r")
-            self.ser.flush()
-            time.sleep(0.08)
-            chunk = self._read_for(0.6)
-            if chunk:
-                seen += chunk
-                if b"*" in chunk:
-                    return seen
-        return seen
-
-    def send_line(self, line: bytes, read_seconds: float = 1.2) -> Tuple[bool, bytes]:
-        """
-        Send command (CR terminated) and collect response.
-        ok=True means we saw a '*' prompt (device responsive).
-        IMPORTANT: This holds self.lock for the whole transaction so the reader
-        cannot consume replies mid-command.
-        """
-        with self.lock:
-            if not self.ser:
-                return False, b"(serial not open)"
-
-            all_seen = b""
-            for _ in range(3):
-                all_seen += self._poke_until_star()
-
-                try:
-                    self.ser.reset_input_buffer()
-                except Exception:
-                    pass
-
-                self.ser.write(line + b"\r")
-                self.ser.flush()
-                time.sleep(0.12)
-
-                resp = self._read_for(read_seconds)
-                all_seen += resp
-
-                if b"*" in resp:
-                    return True, all_seen
-
-                all_seen += self._poke_until_star()
-
-            return (b"*" in all_seen), all_seen
-
-    # ---- basic ----
-    def start(self): return self.send_line(b"S", read_seconds=0.9)
-    def stop(self):  return self.send_line(b"E", read_seconds=0.9)
-    def op_status(self): return self.send_line(b"OP", read_seconds=0.9)
-
-    # ---- settings ----
-    def set_location_id(self, loc_id: int): return self.send_line(f"ID {loc_id:03d}".encode(), read_seconds=0.9)
-    def set_sample_time(self, sec: int):    return self.send_line(f"ST {sec:04d}".encode(), read_seconds=0.9)
-    def set_hold_time(self, sec: int):      return self.send_line(f"SH {sec:04d}".encode(), read_seconds=0.9)
-    def set_samples(self, n: int):          return self.send_line(f"SN {n:03d}".encode(), read_seconds=0.9)
-    def set_report_csv(self):               return self.send_line(b"SR 1", read_seconds=0.9)
-    def set_count_units_m3(self):           return self.send_line(b"CU 3", read_seconds=0.9)
-
-    def read_settings_report(self) -> Tuple[bool, str]:
-        ok, raw = self.send_line(b"1", read_seconds=2.0)
-        return ok, raw.decode(errors="replace")
-
-    @staticmethod
-    def _parse_measurement_line(line: str):
-        line = line.strip()
-        if not line:
-            return None
-
-        line = line.lstrip("*").strip()
-
-        # Expect timestamp prefix
-        if not re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},", line):
-            return None
-
-        # Strip checksum suffix "*xxxxx"
-        if "*" in line:
-            line = line.split("*", 1)[0].strip().rstrip(",")
-
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 5:
-            return None
-
-        ts = parts[0]
-        try:
-            size1 = float(parts[1]); cnt1 = int(parts[2])
-            size2 = float(parts[3]); cnt2 = int(parts[4])
-        except Exception:
-            return None
-
-        out = {"ts": ts}
-
-        if abs(size1 - 0.3) < 0.11:
-            out["c03"] = cnt1
-        if abs(size1 - 5.0) < 0.11:
-            out["c50"] = cnt1
-        if abs(size2 - 0.3) < 0.11:
-            out["c03"] = cnt2
-        if abs(size2 - 5.0) < 0.11:
-            out["c50"] = cnt2
-
-        return out
-
-    # =========================
-    # Reader thread
-    # =========================
-    def _reader_loop(self):
-        buf = b""
-        self.reader_running = True
-        try:
-            while not self.reader_stop.is_set():
-                if not self.ser:
-                    time.sleep(0.1)
-                    continue
-
-                # Non-blocking read; lock held only for the read itself.
-                chunk = b""
-                with self.lock:
-                    n = self.ser.in_waiting if self.ser else 0
-                    if n:
-                        chunk = self.ser.read(n)
-
-                if chunk:
-                    buf += chunk
-                    buf = buf.replace(b"\r", b"\n")
-
-                    while b"\n" in buf:
-                        line, buf = buf.split(b"\n", 1)
-                        s = line.decode(errors="replace").strip()
-                        parsed = self._parse_measurement_line(s)
-                        if parsed:
-                            self.received_samples += 1
-                            with latest_lock:
-                                global latest_reading
-                                latest_reading = {
-                                    "uid": UID,
-                                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                    "status": "ok",
-                                    "data": {
-                                        "c03": parsed.get("c03"),
-                                        "c50": parsed.get("c50"),
-                                    },
-                                    "extended": {
-                                        "device_ts": parsed.get("ts"),
-                                    },
-                                    "raw": None,
-                                }
-
-                            # Append to session data with threshold check
-                            with thresholds_lock:
-                                exceeded_c03 = parsed.get("c03", 0) > thresholds.threshold_c03
-                                exceeded_c50 = parsed.get("c50", 0) > thresholds.threshold_c50
-
-                            dp = SessionDataPoint(
-                                ts=parsed["ts"],
-                                c03=parsed.get("c03", 0),
-                                c50=parsed.get("c50", 0),
-                                exceeded_c03=exceeded_c03,
-                                exceeded_c50=exceeded_c50,
-                            )
-                            session_manager.append(dp)
-
-                            if (
-                                self.run_active
-                                and self.target_samples > 0
-                                and self.received_samples >= self.target_samples
-                            ):
-                                # End run bookkeeping; stop just the reader.
-                                self.run_active = False
-                                self.stop_reader()
-                else:
-                    time.sleep(0.05)
-        finally:
-            self.reader_running = False
-
-    def ensure_reader(self):
-        # If running reader exists, do nothing
-        if self.reader_thread and self.reader_thread.is_alive() and not self.reader_stop.is_set():
-            return
-
-        # If a previous reader is still alive but stop was set, give it a moment to exit
-        if self.reader_thread and self.reader_thread.is_alive() and self.reader_stop.is_set():
-            self.reader_thread.join(timeout=1.0)
-            if self.reader_thread.is_alive():
-                # Don't start a second reader
-                return
-
-        self.reader_stop.clear()
-        self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
-        self.reader_thread.start()
-
-    def stop_reader(self):
-        self.reader_stop.set()
-
-    def wake(self):
-        if not self.ser:
-            return
-        self.ser.reset_input_buffer()
-        self.ser.reset_output_buffer()
-        for _ in range(10):
-            self.ser.write(b"\r")
-            self.ser.flush()
-            time.sleep(0.2)
-            data = self.ser.read_all().decode(errors="ignore")
-            if data.strip():
-                return
-        raise RuntimeError("GT not responding")
-
-gt = GT521()
-
-# =========================
-# Helpers: parse settings report
-# =========================
-
-def parse_settings_report(text: str) -> dict:
-    def pick_int(label: str):
-        m = re.search(rf"^\s*{re.escape(label)}\s*,\s*(\d+)", text, flags=re.MULTILINE)
-        return int(m.group(1)) if m else None
-
-    return {
-        "sample_time_s": pick_int("Sample Time"),
-        "hold_time_s": pick_int("Hold Time"),
-        "samples": pick_int("Samples"),
-    }
+gt = GT521SDriver(uid=UID, port=PORT, baud=BAUD)
 
 # =========================
 # DASHBOARD UI (ORIGINAL + ENHANCED)
@@ -908,110 +632,62 @@ def start(settings: RunSettings):
     current_settings = settings
     applied_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    wanted = {
+    settings_dict = {
         "sample_time_s": settings.sample_time_s,
         "hold_time_s": settings.hold_time_s,
         "samples": settings.samples,
     }
 
+    def on_sample(parsed: Dict[str, Any]) -> None:
+        with thresholds_lock:
+            exceeded_c03 = parsed.get("c03", 0) > thresholds.threshold_c03
+            exceeded_c50 = parsed.get("c50", 0) > thresholds.threshold_c50
+        dp = SessionDataPoint(
+            ts=parsed.get("_device_ts", ""),
+            c03=parsed.get("c03", 0),
+            c50=parsed.get("c50", 0),
+            exceeded_c03=exceeded_c03,
+            exceeded_c50=exceeded_c50,
+        )
+        session_manager.append(dp)
+
     try:
-        gt.open()
-        gt.wake()
-        gt.stop_reader()
-        if gt.reader_thread and gt.reader_thread.is_alive():
-            gt.reader_thread.join(timeout=1.0)
-
-        gt.stop()
-        time.sleep(0.2)
-
-        gt.set_location_id(1)
-        gt.set_sample_time(settings.sample_time_s)
-        gt.set_hold_time(settings.hold_time_s)
-        gt.set_samples(settings.samples)
-        gt.set_count_units_m3()
-
-        gt.set_report_csv()
-
-        readback_ok, report = gt.read_settings_report()
-        applied = parse_settings_report(report) or {}
-
-        mismatch = {
-            k: {"wanted": wanted[k], "got": applied.get(k)}
-            for k in wanted
-            if applied.get(k) != wanted[k]
-        }
-
-        gt.start()
-        gt.op_status()  # verify device started (expect "R" in response)
-
-        gt.target_samples = settings.samples
-        gt.received_samples = 0
-        gt.run_active = True
-        gt.ensure_reader()
-
-        session_id = session_manager.start(metadata=wanted)
-
+        result = gt.start_session(settings_dict, on_sample=on_sample)
+        session_id = session_manager.start(metadata=settings_dict)
+        log.info("GT: session started — id=%s", session_id)
         return JSONResponse({
             "ok": True,
             "session_id": session_id,
             "applied_at": applied_at,
-            "requested": wanted,
-            "applied": applied,
-            "mismatch": mismatch,
-            "readback_ok": bool(readback_ok),
+            "requested": settings_dict,
+            "applied": result.get("applied", {}),
+            "mismatch": result.get("mismatch", {}),
+            "readback_ok": not bool(result.get("mismatch")),
+            "op_status": result.get("op_status"),
             "expected_cycle_s": settings.sample_time_s + settings.hold_time_s,
             "expected_duration_s": (settings.sample_time_s + settings.hold_time_s) * settings.samples,
         })
     except Exception as e:
-        gt.run_active = False
-        gt.target_samples = 0
-        gt.received_samples = 0
+        log.exception("GT: start_session failed")
         session_manager.error(str(e))
-
         return JSONResponse({
             "ok": False,
             "applied_at": applied_at,
-            "requested": wanted,
-            "mismatch": {},
+            "requested": settings_dict,
             "error": str(e),
-            "trace": traceback.format_exc(limit=3),
-        }, status_code=200)
+        }, status_code=500)
 
 @app.post("/gt/stop")
 def stop():
     at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    gt.open()
-
-    gt.run_active = False
-    gt.target_samples = 0
-    gt.received_samples = 0
-    gt.stop_reader()
-    if gt.reader_thread and gt.reader_thread.is_alive():
-        gt.reader_thread.join(timeout=1.0)
-
-    gt.stop()
-    time.sleep(0.15)
-
-    stopped = False
-    for _ in range(6):
-        _, op_raw = gt.op_status()
-        op_text = op_raw.decode(errors="replace")
-        if ("OP S" in op_text) or ("OP STOP" in op_text):
-            stopped = True
-            break
-        time.sleep(0.3)
-
+    result = gt.stop()
     session_manager.complete()
-
-    return JSONResponse({"ok": stopped, "at": at})
+    log.info("GT: session stopped — stopped=%s op=%s", result.get("stopped"), result.get("op_status"))
+    return JSONResponse({"ok": result.get("stopped", False), "at": at})
 
 @app.get("/gt/latest")
 def get_latest():
-    with latest_lock:
-        if latest_reading is None:
-            return JSONResponse({"latest": None})
-        return JSONResponse({"latest": latest_reading})
+    return JSONResponse({"latest": gt.get_reading()})
 
 @app.get("/gt/session-data")
 def get_session_data():
@@ -1035,25 +711,19 @@ def set_thresholds(settings: ThresholdSettings):
 
 @app.get("/gt/status")
 def status():
-    return JSONResponse({
-        "run_active": gt.run_active,
-        "received_samples": gt.received_samples,
-        "target_samples": gt.target_samples,
-        "reader_running": gt.reader_running,
-    })
+    return JSONResponse(gt.get_state())
 
 @app.get("/state")
 def get_state():
     with thresholds_lock:
         t = {"threshold_c03": thresholds.threshold_c03, "threshold_c50": thresholds.threshold_c50}
-    return JSONResponse({
-        "run_active": gt.run_active,
-        "received_samples": gt.received_samples,
-        "target_samples": gt.target_samples,
+    state = gt.get_state()
+    state.update({
         "settings": current_settings.dict(),
         "thresholds": t,
         "last_update": time.time(),
     })
+    return JSONResponse(state)
 
 # =========================
 # OUTDOOR TEMP WEBSOCKET
