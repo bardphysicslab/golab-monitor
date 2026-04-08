@@ -288,7 +288,13 @@ class GT521SDriver:
             pass
 
     def wake(self) -> None:
-        """Send CR repeatedly until device responds. Raises RuntimeError if no response."""
+        """
+        Send CR repeatedly until device responds with '*'.
+
+        Silence on the first 1-2 attempts is normal and is not treated as failure.
+        Falls back to an OP probe if CR attempts do not produce a '*' prompt.
+        Raises RuntimeError if neither CR attempts nor the OP fallback succeed.
+        """
         if not self.ser:
             raise RuntimeError("Serial port not open — call _open() first")
         self.ser.reset_input_buffer()
@@ -296,13 +302,29 @@ class GT521SDriver:
         for attempt in range(10):
             self.ser.write(b"\r")
             self.ser.flush()
-            time.sleep(0.2)
-            data = self.ser.read_all().decode(errors="ignore")
-            log.debug("GT: wake attempt %d received: %r", attempt + 1, data)
-            if data.strip():
-                log.info("GT: device responded on wake attempt %d", attempt + 1)
+            time.sleep(0.3)
+            data = self.ser.read_all()
+            log.info("GT: wake attempt %d — %r", attempt + 1, data)
+            if b"*" in data:
+                log.info("GT: wake success on attempt %d", attempt + 1)
                 return
-        raise RuntimeError("GT not responding: no response to 10 wake attempts")
+
+        # CR attempts did not produce '*' — try OP as a fallback probe.
+        # A valid OP <state> response with trailing '*' counts as wake success.
+        log.info("GT: no '*' from CR attempts; trying OP fallback probe")
+        self.ser.write(b"OP\r")
+        self.ser.flush()
+        time.sleep(0.5)
+        data = self.ser.read_all()
+        log.info("GT: OP fallback response — %r", data)
+        text = data.decode(errors="ignore")
+        if "OP " in text and "*" in text:
+            log.info("GT: wake success via OP fallback probe")
+            return
+
+        raise RuntimeError(
+            "GT not responding: no '*' after 10 CR attempts and OP fallback"
+        )
 
     # ------------------------------------------------------------------
     # Low-level command helpers
@@ -524,7 +546,10 @@ class GT521SDriver:
                                 self._latest = parsed
                             if self._on_sample is not None:
                                 try:
-                                    self._on_sample(parsed)
+                                    self._on_sample({
+                                        "c03": parsed.get("c03"),
+                                        "c50": parsed.get("c50"),
+                                    })
                                 except Exception:
                                     log.exception("GT: on_sample callback raised")
                             if (
