@@ -5,7 +5,7 @@ import time
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, List
 
 import httpx
 from fastapi import FastAPI, WebSocket
@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from gt521s_driver import GT521SDriver
+from bardbox_env_node_v1_driver import SensorDriver as EnvDriver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,6 +28,9 @@ log = logging.getLogger(__name__)
 
 PORT = "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_Y10162-if00-port0"
 BAUD = 9600
+
+ENV_PORT = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_03536383236351C09231-if00"
+ENV_BAUD = 115200
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast?latitude=41.93&longitude=-73.91&current_weather=true"
 
@@ -75,21 +79,6 @@ class SessionDataPoint(BaseModel):
 
 
 class SessionManager:
-    """
-    Manages a single run session.
-
-    Each call to start() creates a new session with a unique session_id.
-    Session IDs are never reused. The session object tracks:
-      uid         — device uid
-      session_id  — unique run identifier (uuid4)
-      status      — "idle" | "running" | "complete" | "error"
-      start_time  — ISO 8601 UTC when the run began
-      end_time    — ISO 8601 UTC when the run ended (None while running)
-      metadata    — run settings used for this session
-      summary     — populated on completion (sample count, etc.)
-      data        — list of SessionDataPoint collected during the run
-    """
-
     def __init__(self):
         self.lock = threading.Lock()
         self._session: Dict[str, Any] = self._empty_session()
@@ -108,7 +97,6 @@ class SessionManager:
         }
 
     def start(self, metadata: Dict[str, Any]) -> str:
-        """Begin a new session. Returns the new session_id."""
         with self.lock:
             session_id = str(uuid.uuid4())
             self._session = {
@@ -165,7 +153,18 @@ session_manager = SessionManager()
 gt = GT521SDriver(uid=UID, port=PORT, baud=BAUD)
 
 # =========================
-# DASHBOARD UI (ORIGINAL + ENHANCED)
+# ENV NODE DRIVER
+# =========================
+
+env = EnvDriver(port=ENV_PORT, baud=ENV_BAUD)
+try:
+    env.connect()
+    log.info("ENV: connected")
+except Exception:
+    log.exception("ENV: failed to connect")
+
+# =========================
+# DASHBOARD UI
 # =========================
 
 @app.get("/", response_class=HTMLResponse)
@@ -179,10 +178,10 @@ def dashboard():
         <style>
             body {{ font-family: system-ui; padding: 30px; max-width: 1600px; margin: 0 auto; background: #f5f5f5; }}
             h1 {{ margin-bottom: 30px; }}
-            
+
             .controls-row {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; margin-bottom: 40px; }}
             @media (max-width: 900px) {{ .controls-row {{ grid-template-columns: 1fr; }} }}
-            
+
             label {{ display:block; margin-top: 12px; font-weight: 600; }}
             input {{ font-size: 16px; padding: 8px; width: 100%; }}
             .card {{ padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
@@ -192,11 +191,9 @@ def dashboard():
             .small {{ font-size: 13px; }}
             .ok {{ color: #0a7; font-weight: 700; }}
             .bad {{ color: #c22; font-weight: 700; }}
-            
+
             .graph-card {{ padding: 20px; border: 1px solid #ddd; border-radius: 10px; background: white; }}
             .graph-title {{ font-size: 18px; font-weight: 700; margin-bottom: 15px; }}
-            .current-reading {{ font-size: 32px; font-weight: 700; color: #0071e3; margin-bottom: 15px; }}
-            .current-reading-unit {{ font-size: 13px; color: #666; }}
             .graph-container {{ position: relative; height: 400px; margin-bottom: 15px; }}
             .threshold-status {{ display: inline-block; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-top: 10px; }}
             .threshold-status.safe {{ background: #d4edda; color: #155724; }}
@@ -263,6 +260,17 @@ def dashboard():
           </div>
         </div>
 
+        <div class="card" style="margin-top: 20px;">
+          <h3>Environment Node</h3>
+          <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:20px;">
+            <div><div class="small muted">PM1</div><div id="env_pm1" style="font-size:28px;font-weight:700;">—</div></div>
+            <div><div class="small muted">PM2.5</div><div id="env_pm25" style="font-size:28px;font-weight:700;">—</div></div>
+            <div><div class="small muted">PM10</div><div id="env_pm10" style="font-size:28px;font-weight:700;">—</div></div>
+            <div><div class="small muted">Temp (°C)</div><div id="env_temp" style="font-size:28px;font-weight:700;">—</div></div>
+            <div><div class="small muted">RH (%)</div><div id="env_rh" style="font-size:28px;font-weight:700;">—</div></div>
+          </div>
+        </div>
+
         <script>
             let chartC03 = null;
             let chartC50 = null;
@@ -294,16 +302,7 @@ def dashboard():
               }};
             }}
 
-            function fmtDuration(totalSeconds) {{
-              const s = Math.max(0, Math.floor(totalSeconds));
-              const h = Math.floor(s / 3600);
-              const m = Math.floor((s % 3600) / 60);
-              const r = s % 60;
-              return `${{h}}h ${{m}}m ${{r}}s`;
-            }}
-
             function updateComputed() {{
-              const s = getSettings();
               if (!pollInterval) {{
                 initializeCharts();
               }}
@@ -313,31 +312,6 @@ def dashboard():
               document.getElementById(id).addEventListener("input", updateComputed);
             }});
             updateComputed();
-
-            async function loadThresholds() {{
-              try {{
-                const r = await fetch("/gt/thresholds");
-                const j = await r.json();
-                if (j.threshold_c03) document.getElementById("threshold_c03").value = j.threshold_c03;
-                if (j.threshold_c50) document.getElementById("threshold_c50").value = j.threshold_c50;
-              }} catch (e) {{
-                console.error("Failed to load thresholds:", e);
-              }}
-            }}
-
-            async function saveThresholds() {{
-              try {{
-                const thresholds = getThresholds();
-                const r = await fetch("/gt/thresholds", {{
-                  method: "POST",
-                  headers: {{ "Content-Type": "application/json" }},
-                  body: JSON.stringify(thresholds),
-                }});
-                const j = await r.json();
-              }} catch (e) {{
-                console.error("Error saving thresholds:", e);
-              }}
-            }}
 
             async function startRun() {{
               const c = document.getElementById("confirm");
@@ -353,7 +327,6 @@ def dashboard():
                 }});
 
                 if (!r.ok) {{
-                  const txt = await r.text().catch(() => "");
                   throw new Error(`HTTP ${{r.status}}`);
                 }}
 
@@ -402,6 +375,24 @@ def dashboard():
               }} catch (e) {{}}
             }}
 
+            async function pollEnv() {{
+              try {{
+                const r = await fetch("/env/latest");
+                const j = await r.json();
+
+                if (j && j.latest) {{
+                  const d = j.latest.data || {{}};
+                  const x = j.latest.extended || {{}};
+
+                  document.getElementById("env_pm1").textContent = (d.pm1_std ?? "—").toString();
+                  document.getElementById("env_pm25").textContent = (d.pm25_std ?? "—").toString();
+                  document.getElementById("env_pm10").textContent = (d.pm10_std ?? "—").toString();
+                  document.getElementById("env_temp").textContent = (d.temp_c ?? "—").toString();
+                  document.getElementById("env_rh").textContent = (x.rh_pct ?? "—").toString();
+                }}
+              }} catch (e) {{}}
+            }}
+
             async function fetchSessionData() {{
               try {{
                 const r = await fetch("/gt/session-data");
@@ -411,18 +402,6 @@ def dashboard():
                 console.error("Failed to fetch session data:", e);
                 return [];
               }}
-            }}
-
-            function generateTimeLabels(sessionDurationSeconds) {{
-              const labels = [];
-              const interval = Math.max(1, Math.floor(sessionDurationSeconds / 20));
-              for (let i = 0; i <= sessionDurationSeconds; i += interval) {{
-                const h = Math.floor(i / 3600).toString().padStart(2, '0');
-                const m = Math.floor((i % 3600) / 60).toString().padStart(2, '0');
-                const s = (i % 60).toString().padStart(2, '0');
-                labels.push(`${{h}}:${{m}}:${{s}}`);
-              }}
-              return labels;
             }}
 
             let sessionStartTime = null;
@@ -441,7 +420,7 @@ def dashboard():
                 const elapsed = getElapsedSeconds(d.ts);
                 const count = canvasId === "chart-c03" ? d.c03 : d.c50;
                 const exceeded = canvasId === "chart-c03" ? d.exceeded_c03 : d.exceeded_c50;
-                
+
                 if (count !== undefined && count !== null && elapsed <= sessionDurationSeconds) {{
                   dataPoints.push({{
                     x: elapsed,
@@ -466,15 +445,14 @@ def dashboard():
                     {{
                       label: "Particle Count",
                       data: dataPoints.map(p => ({{ x: p.x, y: p.y }})),
-                      borderColor: "#0071e3",
                       backgroundColor: dataPoints.map(p => p.color),
                       borderWidth: 0,
                       pointRadius: 4,
                       pointBorderColor: dataPoints.map(p => p.color),
                       pointBorderWidth: 1,
                       showLine: true,
-                      fill: false,
                       borderColor: "#0071e3",
+                      fill: false,
                       borderWidth: 2,
                       tension: 0.2,
                     }},
@@ -605,18 +583,20 @@ def dashboard():
                     stopGraphPolling();
                   }}
                 }}
+
                 wasRunning = j.run_active;
                 const ts = new Date(j.last_update * 1000).toLocaleTimeString();
                 document.getElementById("last_update").textContent = `State as of ${{ts}}`;
-                console.debug("[state]", ts, j);
               }} catch (e) {{}}
             }}
 
             initializeCharts();
             setInterval(pollLatest, 1000);
+            setInterval(pollEnv, 1000);
             setInterval(pollState, 2000);
             pollState();
             pollLatest();
+            pollEnv();
         </script>
     </body>
     </html>
@@ -689,6 +669,13 @@ def stop():
 def get_latest():
     return JSONResponse({"latest": gt.get_reading()})
 
+@app.get("/env/latest")
+def get_env_latest():
+    try:
+        return JSONResponse({"latest": env.get_reading()})
+    except Exception as e:
+        return JSONResponse({"latest": None, "error": str(e)})
+
 @app.get("/gt/session-data")
 def get_session_data():
     data = session_manager.get_data()
@@ -716,7 +703,10 @@ def status():
 @app.get("/state")
 def get_state():
     with thresholds_lock:
-        t = {"threshold_c03": thresholds.threshold_c03, "threshold_c50": thresholds.threshold_c50}
+        t = {
+            "threshold_c03": thresholds.threshold_c03,
+            "threshold_c50": thresholds.threshold_c50,
+        }
     state = gt.get_state()
     state.update({
         "settings": current_settings.dict(),
