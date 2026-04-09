@@ -12,8 +12,8 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from gt521s_driver import GT521SDriver
-from bardbox_env_node_v1_driver import SensorDriver as EnvDriver
+from drivers.gt521s_driver import GT521SDriver
+from drivers.bardbox_env_node_v1_driver import SensorDriver as EnvDriver
 
 logging.basicConfig(
     level=logging.INFO,
