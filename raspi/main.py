@@ -42,6 +42,10 @@ DEFAULT_SAMPLE_TIME_S = 10
 DEFAULT_HOLD_TIME_S = 50
 DEFAULT_SAMPLES = 480
 
+# Unit conversions for UI only
+FT3_TO_M3 = 35.3147
+PMS_0P1L_TO_M3 = 10000
+
 app = FastAPI()
 
 # =========================
@@ -198,6 +202,8 @@ def dashboard():
             .threshold-status {{ display: inline-block; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-top: 10px; }}
             .threshold-status.safe {{ background: #d4edda; color: #155724; }}
             .threshold-status.exceeded {{ background: #f8d7da; color: #721c24; }}
+            .env-grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap:20px; }}
+            @media (max-width: 900px) {{ .env-grid {{ grid-template-columns: repeat(2, 1fr); }} }}
         </style>
     </head>
     <body>
@@ -240,7 +246,7 @@ def dashboard():
           <div class="graph-card">
             <div class="graph-title">0.3µm Particles</div>
             <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
-              <span id="current_c03">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
+              <span id="current_c03">—</span> <span style="font-size: 16px; color: #666;">/m³</span>
             </div>
             <div class="graph-container">
               <canvas id="chart-c03"></canvas>
@@ -251,7 +257,7 @@ def dashboard():
           <div class="graph-card">
             <div class="graph-title">5.0µm Particles</div>
             <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
-              <span id="current_c50">—</span> <span style="font-size: 16px; color: #666;">count/ft³</span>
+              <span id="current_c50">—</span> <span style="font-size: 16px; color: #666;">/m³</span>
             </div>
             <div class="graph-container">
               <canvas id="chart-c50"></canvas>
@@ -261,11 +267,11 @@ def dashboard():
         </div>
 
         <div class="card" style="margin-top: 20px;">
-          <h3>Environment Node</h3>
-          <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:20px;">
-            <div><div class="small muted">PM1</div><div id="env_pm1" style="font-size:28px;font-weight:700;">—</div></div>
-            <div><div class="small muted">PM2.5</div><div id="env_pm25" style="font-size:28px;font-weight:700;">—</div></div>
-            <div><div class="small muted">PM10</div><div id="env_pm10" style="font-size:28px;font-weight:700;">—</div></div>
+          <h3>Environment Node (trend only)</h3>
+          <div class="env-grid">
+            <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_c03" style="font-size:28px;font-weight:700;">—</div></div>
+            <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_c05" style="font-size:28px;font-weight:700;">—</div></div>
+            <div><div class="small muted">&gt;1.0µm /m³</div><div id="env_c10" style="font-size:28px;font-weight:700;">—</div></div>
             <div><div class="small muted">Temp (°C)</div><div id="env_temp" style="font-size:28px;font-weight:700;">—</div></div>
             <div><div class="small muted">RH (%)</div><div id="env_rh" style="font-size:28px;font-weight:700;">—</div></div>
           </div>
@@ -276,6 +282,19 @@ def dashboard():
             let chartC50 = null;
             let pollInterval = null;
             let wasRunning = false;
+
+            const FT3_TO_M3 = {FT3_TO_M3};
+            const PMS_0P1L_TO_M3 = {PMS_0P1L_TO_M3};
+
+            function gtFt3ToM3(value) {{
+              if (value === null || value === undefined) return null;
+              return Math.round(value * FT3_TO_M3);
+            }}
+
+            function pmsCountToM3(value) {{
+              if (value === null || value === undefined) return null;
+              return value * PMS_0P1L_TO_M3;
+            }}
 
             function initializeCharts() {{
               const s = getSettings();
@@ -369,8 +388,10 @@ def dashboard():
                 const r = await fetch("/gt/latest");
                 const j = await r.json();
                 if (j && j.latest) {{
-                  document.getElementById("current_c03").textContent = (j.latest.data?.c03 ?? "—").toString();
-                  document.getElementById("current_c50").textContent = (j.latest.data?.c50 ?? "—").toString();
+                  const c03m3 = gtFt3ToM3(j.latest.data?.c03);
+                  const c50m3 = gtFt3ToM3(j.latest.data?.c50);
+                  document.getElementById("current_c03").textContent = (c03m3 ?? "—").toString();
+                  document.getElementById("current_c50").textContent = (c50m3 ?? "—").toString();
                 }}
               }} catch (e) {{}}
             }}
@@ -384,9 +405,9 @@ def dashboard():
                   const d = j.latest.data || {{}};
                   const x = j.latest.extended || {{}};
 
-                  document.getElementById("env_pm1").textContent = (d.pm1_std ?? "—").toString();
-                  document.getElementById("env_pm25").textContent = (d.pm25_std ?? "—").toString();
-                  document.getElementById("env_pm10").textContent = (d.pm10_std ?? "—").toString();
+                  document.getElementById("env_c03").textContent = (pmsCountToM3(d.c03) ?? "—").toString();
+                  document.getElementById("env_c05").textContent = (pmsCountToM3(x.c05) ?? "—").toString();
+                  document.getElementById("env_c10").textContent = (pmsCountToM3(x.c10) ?? "—").toString();
                   document.getElementById("env_temp").textContent = (d.temp_c ?? "—").toString();
                   document.getElementById("env_rh").textContent = (x.rh_pct ?? "—").toString();
                 }}
@@ -413,18 +434,21 @@ def dashboard():
               return Math.floor((currentTime - sessionStartTime) / 1000);
             }}
 
-            function createOrUpdateChart(canvasId, data, threshold, sessionDurationSeconds) {{
+            function createOrUpdateChart(canvasId, data, thresholdFt3, sessionDurationSeconds) {{
               const ctx = document.getElementById(canvasId).getContext("2d");
+              const thresholdM3 = thresholdFt3 * FT3_TO_M3;
               const dataPoints = [];
+
               data.forEach(d => {{
                 const elapsed = getElapsedSeconds(d.ts);
-                const count = canvasId === "chart-c03" ? d.c03 : d.c50;
+                const countFt3 = canvasId === "chart-c03" ? d.c03 : d.c50;
                 const exceeded = canvasId === "chart-c03" ? d.exceeded_c03 : d.exceeded_c50;
+                const countM3 = gtFt3ToM3(countFt3);
 
-                if (count !== undefined && count !== null && elapsed <= sessionDurationSeconds) {{
+                if (countM3 !== undefined && countM3 !== null && elapsed <= sessionDurationSeconds) {{
                   dataPoints.push({{
                     x: elapsed,
-                    y: Math.max(count, 1),
+                    y: Math.max(countM3, 1),
                     color: exceeded ? "#c22" : "#0071e3"
                   }});
                 }}
@@ -434,8 +458,8 @@ def dashboard():
               const existingChart = chartId === 0 ? chartC03 : chartC50;
 
               const thresholdData = [
-                {{ x: 0, y: threshold }},
-                {{ x: sessionDurationSeconds, y: threshold }}
+                {{ x: 0, y: thresholdM3 }},
+                {{ x: sessionDurationSeconds, y: thresholdM3 }}
               ];
 
               const chartConfig = {{
@@ -479,9 +503,9 @@ def dashboard():
                   scales: {{
                     y: {{
                       type: "logarithmic",
-                      title: {{ display: true, text: "count/ft³ (log scale)" }},
+                      title: {{ display: true, text: "count/m³ (log scale)" }},
                       min: 1,
-                      max: 3000000,
+                      max: 110000000,
                     }},
                     x: {{
                       type: "linear",
@@ -541,8 +565,8 @@ def dashboard():
                 sC50.className = last.exceeded_c50 ? "threshold-status exceeded" : "threshold-status safe";
                 sC50.textContent = last.exceeded_c50 ? "⚠ EXCEEDED" : "✓ Below Threshold";
 
-                document.getElementById("current_c03").textContent = (last.c03 ?? "—").toString();
-                document.getElementById("current_c50").textContent = (last.c50 ?? "—").toString();
+                document.getElementById("current_c03").textContent = (gtFt3ToM3(last.c03) ?? "—").toString();
+                document.getElementById("current_c50").textContent = (gtFt3ToM3(last.c50) ?? "—").toString();
               }}, 1000);
             }}
 
