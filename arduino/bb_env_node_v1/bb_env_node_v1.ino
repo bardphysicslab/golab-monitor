@@ -33,13 +33,11 @@ unsigned long sampleCount = 0;
 PM25_AQI_Data lastPMSData;
 bool hasValidPMS = false;
 
-// =====================
-// Serial Input Buffer
-// =====================
+// Serial input buffer
 String inputLine = "";
 
 // =====================
-// Helper Functions
+// Helpers
 // =====================
 void sendHeader() {
   Serial.println(
@@ -66,11 +64,105 @@ void sendStatus() {
   }
 }
 
+bool readPMS(PM25_AQI_Data &data) {
+  if (!pmsReady) {
+    return false;
+  }
+  return aqi.read(&data);
+}
+
+bool readBME(float &tempC, float &rhPct, float &pressPa) {
+  if (!bmeReady) {
+    return false;
+  }
+
+  tempC = bme.readTemperature();
+  rhPct = bme.readHumidity();
+  pressPa = bme.readPressure(); // already in Pa
+
+  if (isnan(tempC) || isnan(rhPct) || isnan(pressPa)) {
+    return false;
+  }
+
+  return true;
+}
+
+void sendData() {
+  PM25_AQI_Data pmsData;
+  float tempC = 0.0f;
+  float rhPct = 0.0f;
+  float pressPa = 0.0f;
+
+  bool okPMS = readPMS(pmsData);
+  bool okBME = readBME(tempC, rhPct, pressPa);
+
+  // BME failure is treated as a hard error because temp/rh/pressure
+  // are required output fields in every data line.
+  if (!okBME) {
+    Serial.println("ERR SENSOR_FAIL");
+    return;
+  }
+
+  // Update PM cache only when a fresh PM frame is available.
+  if (okPMS) {
+    lastPMSData = pmsData;
+    hasValidPMS = true;
+  }
+
+  // Do not emit a data line until we have at least one valid PMS frame.
+  if (!hasValidPMS) {
+    return;
+  }
+
+  sampleCount++;
+
+  Serial.print("DAT,");
+  Serial.print(sampleCount);
+  Serial.print(",");
+
+  Serial.print(tempC, 2);
+  Serial.print(",");
+  Serial.print(rhPct, 2);
+  Serial.print(",");
+  Serial.print(pressPa, 0);
+  Serial.print(",");
+
+  Serial.print(lastPMSData.pm10_standard);
+  Serial.print(",");
+  Serial.print(lastPMSData.pm25_standard);
+  Serial.print(",");
+  Serial.print(lastPMSData.pm100_standard);
+  Serial.print(",");
+
+  Serial.print(lastPMSData.pm10_env);
+  Serial.print(",");
+  Serial.print(lastPMSData.pm25_env);
+  Serial.print(",");
+  Serial.print(lastPMSData.pm100_env);
+  Serial.print(",");
+
+  Serial.print(lastPMSData.particles_03um);
+  Serial.print(",");
+  Serial.print(lastPMSData.particles_05um);
+  Serial.print(",");
+  Serial.print(lastPMSData.particles_10um);
+  Serial.print(",");
+  Serial.print(lastPMSData.particles_25um);
+  Serial.print(",");
+  Serial.print(lastPMSData.particles_50um);
+  Serial.print(",");
+  Serial.println(lastPMSData.particles_100um);
+}
+
 void handleCommand(const String &cmd) {
   if (cmd == "START") {
     running = true;
     sampleCount = 0;
     lastSampleTime = millis();
+
+    // Require a fresh PM frame for each new run.
+    hasValidPMS = false;
+
     Serial.println("OK START");
     sendHeader();
   }
@@ -116,98 +208,13 @@ void checkSerial() {
   }
 }
 
-bool readPMS(PM25_AQI_Data &data) {
-  if (!pmsReady) return false;
-  return aqi.read(&data);
-}
-
-bool readBME(float &tempC, float &rhPct, float &pressPa) {
-  if (!bmeReady) return false;
-
-  tempC = bme.readTemperature();
-  rhPct = bme.readHumidity();
-  pressPa = bme.readPressure();
-
-  if (isnan(tempC) || isnan(rhPct) || isnan(pressPa)) {
-    return false;
-  }
-
-  return true;
-}
-
-void sendData() {
-  PM25_AQI_Data pmsData;
-  float tempC = 0.0;
-  float rhPct = 0.0;
-  float pressPa = 0.0;
-
-  bool okPMS = readPMS(pmsData);
-  bool okBME = readBME(tempC, rhPct, pressPa);
-
-  // BME failure is a true error
-  if (!okBME) {
-    Serial.println("ERR SENSOR_FAIL");
-    return;
-  }
-
-  // Update PM cache only when a fresh packet is available
-  if (okPMS) {
-    lastPMSData = pmsData;
-    hasValidPMS = true;
-  }
-
-  // Don't send data until first valid PM packet exists
-  if (!hasValidPMS) {
-    return;
-  }
-
-  sampleCount++;
-
-  Serial.print("DAT,");
-  Serial.print(sampleCount);
-  Serial.print(",");
-
-  Serial.print(tempC, 2);
-  Serial.print(",");
-  Serial.print(rhPct, 2);
-  Serial.print(",");
-  Serial.print(pressPa, 0);
-  Serial.print(",");
-
-  Serial.print(lastPMSData.pm10_standard);
-  Serial.print(",");
-  Serial.print(lastPMSData.pm25_standard);
-  Serial.print(",");
-  Serial.print(lastPMSData.pm100_standard);
-  Serial.print(",");
-
-  Serial.print(lastPMSData.pm10_env);
-  Serial.print(",");
-  Serial.print(lastPMSData.pm25_env);
-  Serial.print(",");
-  Serial.print(lastPMSData.pm100_env);
-  Serial.print(",");
-
-  Serial.print(lastPMSData.particles_03um);
-  Serial.print(",");
-  Serial.print(lastPMSData.particles_05um);
-  Serial.print(",");
-  Serial.print(lastPMSData.particles_10um);
-  Serial.print(",");
-  Serial.print(lastPMSData.particles_25um);
-  Serial.print(",");
-  Serial.print(lastPMSData.particles_50um);
-  Serial.print(",");
-  Serial.println(lastPMSData.particles_100um);
-}
-
 // =====================
 // Setup
 // =====================
 void setup() {
   Serial.begin(115200);
   pmSerial.begin(9600);
-/Users/lyricmateo/Documents/Arduino/serial_sensor_node_v1.ino
+
   pmsReady = aqi.begin_UART(&pmSerial);
   bmeReady = bme.begin(BME_ADDRESS);
 }
