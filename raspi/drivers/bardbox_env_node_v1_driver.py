@@ -186,8 +186,9 @@ class BardboxEnvNodeV1Driver:
             baudrate=self.baud,
             timeout=5,
         )
-        time.sleep(0.1)
+        time.sleep(2.5)
         self._ser.reset_input_buffer()
+        self._ser.reset_output_buffer()
 
     def _send_info(self) -> None:
         """Send INFO\\n and parse the OK INFO response."""
