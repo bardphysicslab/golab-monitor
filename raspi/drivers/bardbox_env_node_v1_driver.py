@@ -132,7 +132,13 @@ class BardboxEnvNodeV1Driver:
                 "uid": uid,
                 "timestamp": now_iso,
                 "status": "error",
-                "data": {},
+                "data": {
+                    "temp_c": None,
+                    "pm1_std": None,
+                    "pm25_std": None,
+                    "pm10_std": None,
+                    "c03": None,
+                },
                 "extended": {},
                 "raw": None,
                 "error": "no valid reading received yet",
@@ -383,3 +389,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nStopping...")
         driver.stop()
+
+# Contract test alias
+SensorDriver = BardboxEnvNodeV1Driver
