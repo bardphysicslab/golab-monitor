@@ -180,31 +180,48 @@ def dashboard():
         <title>GoLab Monitor</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
         <style>
-            body {{ font-family: system-ui; padding: 30px; max-width: 1600px; margin: 0 auto; background: #000; color: #fff; }}
-            h1 {{ margin-bottom: 30px; color: #fff; }}
-            h3, h4, label, .graph-title {{ color: #fff; }}
+            :root {
+                --bg: #000;
+                --panel: #111;
+                --panel-border: #333;
+                --text: #fff;
+                --muted: #aaa;
+                --accent: #4da3ff;
+                --accent-hover: #2f85e0;
+                --ok: #38d39f;
+                --bad: #ff6b6b;
+                --safe-bg: #0f2a1f;
+                --safe-text: #9ff0c7;
+                --exceeded-bg: #3a1212;
+                --exceeded-text: #ffb3b3;
+                --grid: #333;
+            }
 
-            .controls-row {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; margin-bottom: 40px; }}
-            @media (max-width: 900px) {{ .controls-row {{ grid-template-columns: 1fr; }} }}
+            body { font-family: system-ui; padding: 30px; max-width: 1600px; margin: 0 auto; background: var(--bg); color: var(--text); }
+            h1 { margin-bottom: 30px; color: var(--text); }
+            h3, h4, label, .graph-title { color: var(--text); }
 
-            label {{ display:block; margin-top: 12px; font-weight: 600; }}
-            input {{ font-size: 16px; padding: 8px; width: 100%; background: #111; color: #fff; border: 1px solid #333; border-radius: 6px; }}
-            .card {{ padding: 20px; border: 1px solid #333; border-radius: 8px; background: #111; box-shadow: none; }}
-            button {{ font-size: 18px; padding: 10px 16px; margin-right: 10px; cursor: pointer; background: #1f6feb; color: white; border: none; border-radius: 6px; }}
-            button:hover {{ background: #1158c7; }}
-            .muted {{ color:#aaa; }}
-            .small {{ font-size: 13px; }}
-            .ok {{ color: #38d39f; font-weight: 700; }}
-            .bad {{ color: #ff6b6b; font-weight: 700; }}
+            .controls-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; margin-bottom: 40px; }
+            @media (max-width: 900px) { .controls-row { grid-template-columns: 1fr; } }
 
-            .graph-card {{ padding: 20px; border: 1px solid #333; border-radius: 10px; background: #111; }}
-            .graph-title {{ font-size: 18px; font-weight: 700; margin-bottom: 15px; }}
-            .graph-container {{ position: relative; height: 400px; margin-bottom: 15px; }}
-            .threshold-status {{ display: inline-block; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-top: 10px; }}
-            .threshold-status.safe {{ background: #0f2a1f; color: #9ff0c7; }}
-            .threshold-status.exceeded {{ background: #3a1212; color: #ffb3b3; }}
-            .env-grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap:20px; }}
-            @media (max-width: 900px) {{ .env-grid {{ grid-template-columns: repeat(2, 1fr); }} }}
+            label { display:block; margin-top: 12px; font-weight: 600; }
+            input { font-size: 16px; padding: 8px; width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--panel-border); border-radius: 6px; }
+            .card { padding: 20px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--panel); box-shadow: none; }
+            button { font-size: 18px; padding: 10px 16px; margin-right: 10px; cursor: pointer; background: var(--accent); color: white; border: none; border-radius: 6px; }
+            button:hover { background: var(--accent-hover); }
+            .muted { color: var(--muted); }
+            .small { font-size: 13px; }
+            .ok { color: var(--ok); font-weight: 700; }
+            .bad { color: var(--bad); font-weight: 700; }
+
+            .graph-card { padding: 20px; border: 1px solid var(--panel-border); border-radius: 10px; background: var(--panel); }
+            .graph-title { font-size: 18px; font-weight: 700; margin-bottom: 15px; }
+            .graph-container { position: relative; height: 400px; margin-bottom: 15px; }
+            .threshold-status { display: inline-block; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-top: 10px; }
+            .threshold-status.safe { background: var(--safe-bg); color: var(--safe-text); }
+            .threshold-status.exceeded { background: var(--exceeded-bg); color: var(--exceeded-text); }
+            .env-grid { display:grid; grid-template-columns: repeat(5, 1fr); gap:20px; }
+            @media (max-width: 900px) { .env-grid { grid-template-columns: repeat(2, 1fr); } }
         </style>
     </head>
     <body>
@@ -246,8 +263,8 @@ def dashboard():
 
           <div class="graph-card">
             <div class="graph-title">0.3µm Particles</div>
-            <div style="font-size: 28px; font-weight: 700; color: #4da3ff; margin-bottom: 15px;">
-              <span id="current_c03">—</span> <span style="font-size: 16px; color: #aaa;">/m³</span>
+            <div style="font-size: 28px; font-weight: 700; color: var(--accent); margin-bottom: 15px;">
+              <span id="current_c03">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
             </div>
             <div class="graph-container">
               <canvas id="chart-c03"></canvas>
@@ -257,8 +274,8 @@ def dashboard():
 
           <div class="graph-card">
             <div class="graph-title">5.0µm Particles</div>
-            <div style="font-size: 28px; font-weight: 700; color: #4da3ff; margin-bottom: 15px;">
-              <span id="current_c50">—</span> <span style="font-size: 16px; color: #aaa;">/m³</span>
+            <div style="font-size: 28px; font-weight: 700; color: var(--accent); margin-bottom: 15px;">
+              <span id="current_c50">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
             </div>
             <div class="graph-container">
               <canvas id="chart-c50"></canvas>
@@ -523,7 +540,8 @@ def dashboard():
                           const s = (value % 60).toString().padStart(2, '0');
                           return h + ':' + m + ':' + s;
                         }}
-                      }}
+                      }},
+                      grid: {{ color: "#333" }}
                     }},
                   }},
                 }},
