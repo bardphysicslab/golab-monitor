@@ -180,28 +180,29 @@ def dashboard():
         <title>GoLab Monitor</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
         <style>
-            body {{ font-family: system-ui; padding: 30px; max-width: 1600px; margin: 0 auto; background: #f5f5f5; }}
-            h1 {{ margin-bottom: 30px; }}
+            body {{ font-family: system-ui; padding: 30px; max-width: 1600px; margin: 0 auto; background: #000; color: #fff; }}
+            h1 {{ margin-bottom: 30px; color: #fff; }}
+            h3, h4, label, .graph-title {{ color: #fff; }}
 
             .controls-row {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; margin-bottom: 40px; }}
             @media (max-width: 900px) {{ .controls-row {{ grid-template-columns: 1fr; }} }}
 
             label {{ display:block; margin-top: 12px; font-weight: 600; }}
-            input {{ font-size: 16px; padding: 8px; width: 100%; }}
-            .card {{ padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-            button {{ font-size: 18px; padding: 10px 16px; margin-right: 10px; cursor: pointer; background: #0071e3; color: white; border: none; border-radius: 6px; }}
-            button:hover {{ background: #0062cc; }}
-            .muted {{ color:#666; }}
+            input {{ font-size: 16px; padding: 8px; width: 100%; background: #111; color: #fff; border: 1px solid #333; border-radius: 6px; }}
+            .card {{ padding: 20px; border: 1px solid #333; border-radius: 8px; background: #111; box-shadow: none; }}
+            button {{ font-size: 18px; padding: 10px 16px; margin-right: 10px; cursor: pointer; background: #1f6feb; color: white; border: none; border-radius: 6px; }}
+            button:hover {{ background: #1158c7; }}
+            .muted {{ color:#aaa; }}
             .small {{ font-size: 13px; }}
-            .ok {{ color: #0a7; font-weight: 700; }}
-            .bad {{ color: #c22; font-weight: 700; }}
+            .ok {{ color: #38d39f; font-weight: 700; }}
+            .bad {{ color: #ff6b6b; font-weight: 700; }}
 
-            .graph-card {{ padding: 20px; border: 1px solid #ddd; border-radius: 10px; background: white; }}
+            .graph-card {{ padding: 20px; border: 1px solid #333; border-radius: 10px; background: #111; }}
             .graph-title {{ font-size: 18px; font-weight: 700; margin-bottom: 15px; }}
             .graph-container {{ position: relative; height: 400px; margin-bottom: 15px; }}
             .threshold-status {{ display: inline-block; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-top: 10px; }}
-            .threshold-status.safe {{ background: #d4edda; color: #155724; }}
-            .threshold-status.exceeded {{ background: #f8d7da; color: #721c24; }}
+            .threshold-status.safe {{ background: #0f2a1f; color: #9ff0c7; }}
+            .threshold-status.exceeded {{ background: #3a1212; color: #ffb3b3; }}
             .env-grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap:20px; }}
             @media (max-width: 900px) {{ .env-grid {{ grid-template-columns: repeat(2, 1fr); }} }}
         </style>
@@ -245,8 +246,8 @@ def dashboard():
 
           <div class="graph-card">
             <div class="graph-title">0.3µm Particles</div>
-            <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
-              <span id="current_c03">—</span> <span style="font-size: 16px; color: #666;">/m³</span>
+            <div style="font-size: 28px; font-weight: 700; color: #4da3ff; margin-bottom: 15px;">
+              <span id="current_c03">—</span> <span style="font-size: 16px; color: #aaa;">/m³</span>
             </div>
             <div class="graph-container">
               <canvas id="chart-c03"></canvas>
@@ -256,8 +257,8 @@ def dashboard():
 
           <div class="graph-card">
             <div class="graph-title">5.0µm Particles</div>
-            <div style="font-size: 28px; font-weight: 700; color: #0071e3; margin-bottom: 15px;">
-              <span id="current_c50">—</span> <span style="font-size: 16px; color: #666;">/m³</span>
+            <div style="font-size: 28px; font-weight: 700; color: #4da3ff; margin-bottom: 15px;">
+              <span id="current_c50">—</span> <span style="font-size: 16px; color: #aaa;">/m³</span>
             </div>
             <div class="graph-container">
               <canvas id="chart-c50"></canvas>
@@ -449,7 +450,7 @@ def dashboard():
                   dataPoints.push({{
                     x: elapsed,
                     y: Math.max(countM3, 1),
-                    color: exceeded ? "#c22" : "#0071e3"
+                    color: exceeded ? "#ff6b6b" : "#4da3ff"
                   }});
                 }}
               }});
@@ -475,7 +476,7 @@ def dashboard():
                       pointBorderColor: dataPoints.map(p => p.color),
                       pointBorderWidth: 1,
                       showLine: true,
-                      borderColor: "#0071e3",
+                      borderColor: "#4da3ff",
                       fill: false,
                       borderWidth: 2,
                       tension: 0.2,
@@ -483,7 +484,7 @@ def dashboard():
                     {{
                       label: "Threshold",
                       data: thresholdData,
-                      borderColor: "#c22",
+                      borderColor: "#ff6b6b",
                       borderDash: [5, 5],
                       borderWidth: 2,
                       pointRadius: 0,
@@ -497,13 +498,15 @@ def dashboard():
                   maintainAspectRatio: false,
                   animation: false,
                   plugins: {{
-                    legend: {{ display: true, position: "top" }},
+                    legend: {{ display: true, position: "top", labels: {{ color: "#fff" }} }},
                     tooltip: {{ enabled: true }}
                   }},
                   scales: {{
                     y: {{
                       type: "logarithmic",
-                      title: {{ display: true, text: "count/m³ (log scale)" }},
+                      title: {{ display: true, text: "count/m³ (log scale)", color: "#fff" }},
+                      ticks: {{ color: "#fff" }},
+                      grid: {{ color: "#333" }},
                       min: 1,
                       max: 110000000,
                     }},
@@ -511,8 +514,9 @@ def dashboard():
                       type: "linear",
                       min: 0,
                       max: sessionDurationSeconds,
-                      title: {{ display: true, text: "Elapsed Time (HH:MM:SS)" }},
+                      title: {{ display: true, text: "Elapsed Time (HH:MM:SS)", color: "#fff" }},
                       ticks: {{
+                        color: "#fff",
                         callback: function(value) {{
                           const h = Math.floor(value / 3600).toString().padStart(2, '0');
                           const m = Math.floor((value % 3600) / 60).toString().padStart(2, '0');
