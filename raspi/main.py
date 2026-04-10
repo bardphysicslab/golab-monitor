@@ -715,14 +715,14 @@ def dashboard():
                 c50Input.placeholder = "";
               }}
 
-              const payload = {
+              const payload = {{
                 threshold_c03: (v03 !== null && v03 !== undefined)
                   ? v03
                   : parseInt(c03Input.dataset.lastValue || c03Input.value || "1000"),
                 threshold_c50: (v50 !== null && v50 !== undefined)
                   ? v50
                   : parseInt(c50Input.dataset.lastValue || c50Input.value || "500"),
-              };
+              }};
 
               fetch("/gt/thresholds", {{
                 method: "POST",
@@ -739,7 +739,7 @@ def dashboard():
               document.getElementById(id).addEventListener("input", function() {{
                 this.dataset.lastValue = this.value;
               }});
-        }});
+            }});
 
             initializeCharts();
             setInterval(pollLatest, 1000);
