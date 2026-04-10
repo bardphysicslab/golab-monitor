@@ -189,6 +189,9 @@ except Exception:
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     s = current_settings
+    iso_defaults = CLEANROOM_STANDARDS.get("iso_14644_1", {}).get("ISO_3", {})
+    default_c03 = iso_defaults.get("0.3", 1000)
+    default_c50 = iso_defaults.get("5.0", 500)
     return f"""
     <html>
     <head>
@@ -263,23 +266,17 @@ def dashboard():
             <select id="threshold_preset" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;">
               <option value="ISO_1">ISO 1</option>
               <option value="ISO_2">ISO 2</option>
-              <option value="ISO_3">ISO 3</option>
+              <option value="ISO_3" selected>ISO 3</option>
               <option value="ISO_4">ISO 4</option>
-              <option value="ISO_5" selected>ISO 5</option>
+              <option value="ISO_5">ISO 5</option>
               <option value="ISO_6">ISO 6</option>
               <option value="ISO_7">ISO 7</option>
               <option value="ISO_8">ISO 8</option>
               <option value="ISO_9">ISO 9</option>
             </select>
 
-            <input id="threshold_c03" type="hidden" value="1000"/>
-            <input id="threshold_c50" type="hidden" value="500"/>
-
-            <div class="small muted" style="margin-top:12px;">
-              Active thresholds:
-              <span id="threshold_display_c03">1000</span> @ 0.3µm,
-              <span id="threshold_display_c50">500</span> @ 5.0µm (count/m³)
-            </div>
+            <input id="threshold_c03" type="hidden" value="{default_c03}"/>
+            <input id="threshold_c50" type="hidden" value="{default_c50}"/>
 
             <p class="muted small" style="margin-top:12px;">
               Start applies settings to the GT, then begins sampling.
@@ -644,8 +641,6 @@ def dashboard():
 
                 document.getElementById("threshold_c03").value = j.thresholds.threshold_c03;
                 document.getElementById("threshold_c50").value = j.thresholds.threshold_c50;
-                document.getElementById("threshold_display_c03").textContent = j.thresholds.threshold_c03;
-                document.getElementById("threshold_display_c50").textContent = j.thresholds.threshold_c50;
 
                 const c = document.getElementById("confirm");
                 if (j.run_active) {{
@@ -678,8 +673,6 @@ def dashboard():
             function applyPreset(presetKey) {{
               const c03Input = document.getElementById("threshold_c03");
               const c50Input = document.getElementById("threshold_c50");
-              const displayC03 = document.getElementById("threshold_display_c03");
-              const displayC50 = document.getElementById("threshold_display_c50");
 
               const preset = CLEANROOM_PRESETS[presetKey];
               if (!preset) return;
@@ -687,15 +680,16 @@ def dashboard():
               const v03 = preset["0.3"];
               const v50 = preset["5.0"];
 
-              c03Input.value = (v03 !== null && v03 !== undefined) ? v03 : "";
-              c50Input.value = (v50 !== null && v50 !== undefined) ? v50 : "";
-
-              displayC03.textContent = (v03 !== null && v03 !== undefined) ? v03 : "\u2014";
-              displayC50.textContent = (v50 !== null && v50 !== undefined) ? v50 : "\u2014";
+              if (v03 !== null && v03 !== undefined) {{
+                c03Input.value = v03;
+              }}
+              if (v50 !== null && v50 !== undefined) {{
+                c50Input.value = v50;
+              }}
 
               const payload = {{
-                threshold_c03: (v03 !== null && v03 !== undefined) ? v03 : 1000,
-                threshold_c50: (v50 !== null && v50 !== undefined) ? v50 : 500,
+                threshold_c03: parseInt(c03Input.value),
+                threshold_c50: parseInt(c50Input.value),
               }};
 
               fetch("/gt/thresholds", {{
@@ -720,9 +714,8 @@ def dashboard():
             document.getElementById("threshold_preset").addEventListener("change", function() {{
               applyPreset(this.value);
             }});
-
-            initializeCharts();
-            applyPreset("ISO_5");
+            
+            applyPreset("ISO_3");
             setInterval(pollLatest, 1000);
             setInterval(pollEnv, 1000);
             setInterval(pollState, 2000);
