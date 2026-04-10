@@ -1,10 +1,12 @@
 import asyncio
+import json
 import logging
 import sys
 import time
 import threading
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Any, List
 
 import httpx
@@ -47,6 +49,19 @@ FT3_TO_M3 = 35.3147
 PMS_0P1L_TO_M3 = 10000
 
 app = FastAPI()
+
+# =========================
+# CLEANROOM STANDARDS
+# =========================
+
+_STANDARDS_PATH = Path(__file__).parent / "config" / "cleanroom_standards.json"
+try:
+    with open(_STANDARDS_PATH) as _f:
+        CLEANROOM_STANDARDS = json.load(_f)
+    log.info("Cleanroom standards loaded from %s", _STANDARDS_PATH)
+except Exception:
+    CLEANROOM_STANDARDS = {}
+    log.warning("Could not load cleanroom_standards.json — presets disabled")
 
 # =========================
 # THRESHOLD SETTINGS
@@ -242,12 +257,26 @@ def dashboard():
             <label>Samples (1–999)</label>
             <input id="samples" type="number" min="1" max="999" value="{s.samples}"/>
 
-            <h4 style="margin-top: 20px; margin-bottom: 15px; border-top: 1px solid #ddd; padding-top: 15px;">Threshold Settings</h4>
+            <h4 style="margin-top: 20px; margin-bottom: 15px; border-top: 1px solid #333; padding-top: 15px;">Threshold Settings</h4>
 
-            <label>0.3µm Threshold (count/ft³)</label>
+            <label>Preset</label>
+            <select id="threshold_preset" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;">
+              <option value="manual">Manual</option>
+              <option value="ISO_1">ISO 1</option>
+              <option value="ISO_2">ISO 2</option>
+              <option value="ISO_3">ISO 3</option>
+              <option value="ISO_4">ISO 4</option>
+              <option value="ISO_5">ISO 5</option>
+              <option value="ISO_6">ISO 6</option>
+              <option value="ISO_7">ISO 7</option>
+              <option value="ISO_8">ISO 8</option>
+              <option value="ISO_9">ISO 9</option>
+            </select>
+
+            <label>0.3µm Threshold (count/m³)</label>
             <input id="threshold_c03" type="number" value="1000" min="1" max="999999"/>
 
-            <label>5.0µm Threshold (count/ft³)</label>
+            <label>5.0µm Threshold (count/m³)</label>
             <input id="threshold_c50" type="number" value="500" min="1" max="999999"/>
 
             <p class="muted small" style="margin-top:12px;">
@@ -638,6 +667,80 @@ def dashboard():
               }} catch (e) {{}}
             }}
 
+            // =========================
+            // CLEANROOM PRESET LOGIC
+            // =========================
+
+            const CLEANROOM_PRESETS = {json.dumps(CLEANROOM_STANDARDS.get("iso_14644_1", {}))};
+
+            function applyPreset(presetKey) {{
+              const c03Input = document.getElementById("threshold_c03");
+              const c50Input = document.getElementById("threshold_c50");
+
+              if (presetKey === "manual") {{
+                c03Input.value = c03Input.dataset.lastValue || c03Input.value;
+                c50Input.value = c50Input.dataset.lastValue || c50Input.value;
+                c03Input.disabled = false;
+                c50Input.disabled = false;
+                c03Input.placeholder = "";
+                c50Input.placeholder = "";
+                return;
+              }}
+
+              const preset = CLEANROOM_PRESETS[presetKey];
+              if (!preset) return;
+
+              const v03 = preset["0.3"];
+              const v50 = preset["5.0"];
+
+              if (v03 === null || v03 === undefined) {{
+                c03Input.value = "";
+                c03Input.placeholder = "\u2014";
+                c03Input.disabled = true;
+              }} else {{
+                c03Input.value = v03;
+                c03Input.dataset.lastValue = v03;
+                c03Input.disabled = false;
+                c03Input.placeholder = "";
+              }}
+
+              if (v50 === null || v50 === undefined) {{
+                c50Input.value = "";
+                c50Input.placeholder = "\u2014";
+                c50Input.disabled = true;
+              }} else {{
+                c50Input.value = v50;
+                c50Input.dataset.lastValue = v50;
+                c50Input.disabled = false;
+                c50Input.placeholder = "";
+              }}
+
+              const payload = {
+                threshold_c03: (v03 !== null && v03 !== undefined)
+                  ? v03
+                  : parseInt(c03Input.dataset.lastValue || c03Input.value || "1000"),
+                threshold_c50: (v50 !== null && v50 !== undefined)
+                  ? v50
+                  : parseInt(c50Input.dataset.lastValue || c50Input.value || "500"),
+              };
+
+              fetch("/gt/thresholds", {{
+                method: "POST",
+                headers: {{ "Content-Type": "application/json" }},
+                body: JSON.stringify(payload),
+              }}).catch(e => console.error("Failed to apply preset thresholds:", e));
+            }}
+
+            document.getElementById("threshold_preset").addEventListener("change", function() {{
+              applyPreset(this.value);
+            }});
+
+            ["threshold_c03","threshold_c50"].forEach(id => {{
+              document.getElementById(id).addEventListener("input", function() {{
+                this.dataset.lastValue = this.value;
+              }});
+        }});
+
             initializeCharts();
             setInterval(pollLatest, 1000);
             setInterval(pollEnv, 1000);
@@ -743,6 +846,19 @@ def set_thresholds(settings: ThresholdSettings):
     with thresholds_lock:
         thresholds = settings
     return JSONResponse({"ok": True, "thresholds": settings.dict()})
+
+@app.get("/presets")
+def get_presets():
+    iso = CLEANROOM_STANDARDS.get("iso_14644_1", {})
+    result = {}
+    for key, val in iso.items():
+        if key == "units":
+            continue
+        result[key] = {
+            "0.3": val.get("0.3"),
+            "5.0": val.get("5.0"),
+        }
+    return JSONResponse({"iso_14644_1": result, "units": iso.get("units", "particles/m3")})
 
 @app.get("/gt/status")
 def status():
