@@ -261,23 +261,25 @@ def dashboard():
 
             <label>Preset</label>
             <select id="threshold_preset" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;">
-              <option value="manual">Manual</option>
               <option value="ISO_1">ISO 1</option>
               <option value="ISO_2">ISO 2</option>
               <option value="ISO_3">ISO 3</option>
               <option value="ISO_4">ISO 4</option>
-              <option value="ISO_5">ISO 5</option>
+              <option value="ISO_5" selected>ISO 5</option>
               <option value="ISO_6">ISO 6</option>
               <option value="ISO_7">ISO 7</option>
               <option value="ISO_8">ISO 8</option>
               <option value="ISO_9">ISO 9</option>
             </select>
 
-            <label>0.3µm Threshold (count/m³)</label>
-            <input id="threshold_c03" type="number" value="1000" min="1" max="999999"/>
+            <input id="threshold_c03" type="hidden" value="1000"/>
+            <input id="threshold_c50" type="hidden" value="500"/>
 
-            <label>5.0µm Threshold (count/m³)</label>
-            <input id="threshold_c50" type="number" value="500" min="1" max="999999"/>
+            <div class="small muted" style="margin-top:12px;">
+              Active thresholds:
+              <span id="threshold_display_c03">1000</span> @ 0.3µm,
+              <span id="threshold_display_c50">500</span> @ 5.0µm (count/m³)
+            </div>
 
             <p class="muted small" style="margin-top:12px;">
               Start applies settings to the GT, then begins sampling.
@@ -371,9 +373,7 @@ def dashboard():
             }}
 
             function updateComputed() {{
-              if (!pollInterval) {{
-                initializeCharts();
-              }}
+              initializeCharts();
             }}
 
             ["sample_time_s","hold_time_s","samples"].forEach(id => {{
@@ -635,15 +635,18 @@ def dashboard():
                 const r = await fetch("/state");
                 const j = await r.json();
 
-                const editingIds = ["sample_time_s","hold_time_s","samples","threshold_c03","threshold_c50"];
+                const editingIds = ["sample_time_s","hold_time_s","samples"];
                 const userEditing = editingIds.includes(document.activeElement?.id);
                 if (!userEditing) {{
                   document.getElementById("sample_time_s").value = j.settings.sample_time_s;
                   document.getElementById("hold_time_s").value = j.settings.hold_time_s;
                   document.getElementById("samples").value = j.settings.samples;
-                  document.getElementById("threshold_c03").value = j.thresholds.threshold_c03;
-                  document.getElementById("threshold_c50").value = j.thresholds.threshold_c50;
                 }}
+
+                document.getElementById("threshold_c03").value = j.thresholds.threshold_c03;
+                document.getElementById("threshold_c50").value = j.thresholds.threshold_c50;
+                document.getElementById("threshold_display_c03").textContent = j.thresholds.threshold_c03;
+                document.getElementById("threshold_display_c50").textContent = j.thresholds.threshold_c50;
 
                 const c = document.getElementById("confirm");
                 if (j.run_active) {{
@@ -676,16 +679,8 @@ def dashboard():
             function applyPreset(presetKey) {{
               const c03Input = document.getElementById("threshold_c03");
               const c50Input = document.getElementById("threshold_c50");
-
-              if (presetKey === "manual") {{
-                c03Input.value = c03Input.dataset.lastValue || c03Input.value;
-                c50Input.value = c50Input.dataset.lastValue || c50Input.value;
-                c03Input.disabled = false;
-                c50Input.disabled = false;
-                c03Input.placeholder = "";
-                c50Input.placeholder = "";
-                return;
-              }}
+              const displayC03 = document.getElementById("threshold_display_c03");
+              const displayC50 = document.getElementById("threshold_display_c50");
 
               const preset = CLEANROOM_PRESETS[presetKey];
               if (!preset) return;
@@ -693,55 +688,37 @@ def dashboard():
               const v03 = preset["0.3"];
               const v50 = preset["5.0"];
 
-              if (v03 === null || v03 === undefined) {{
-                c03Input.value = "";
-                c03Input.placeholder = "\u2014";
-                c03Input.disabled = true;
-              }} else {{
-                c03Input.value = v03;
-                c03Input.dataset.lastValue = v03;
-                c03Input.disabled = false;
-                c03Input.placeholder = "";
-              }}
+              c03Input.value = (v03 !== null && v03 !== undefined) ? v03 : "";
+              c50Input.value = (v50 !== null && v50 !== undefined) ? v50 : "";
 
-              if (v50 === null || v50 === undefined) {{
-                c50Input.value = "";
-                c50Input.placeholder = "\u2014";
-                c50Input.disabled = true;
-              }} else {{
-                c50Input.value = v50;
-                c50Input.dataset.lastValue = v50;
-                c50Input.disabled = false;
-                c50Input.placeholder = "";
-              }}
+              displayC03.textContent = (v03 !== null && v03 !== undefined) ? v03 : "\u2014";
+              displayC50.textContent = (v50 !== null && v50 !== undefined) ? v50 : "\u2014";
 
               const payload = {{
-                threshold_c03: (v03 !== null && v03 !== undefined)
-                  ? v03
-                  : parseInt(c03Input.dataset.lastValue || c03Input.value || "1000"),
-                threshold_c50: (v50 !== null && v50 !== undefined)
-                  ? v50
-                  : parseInt(c50Input.dataset.lastValue || c50Input.value || "500"),
+                threshold_c03: (v03 !== null && v03 !== undefined) ? v03 : 1000,
+                threshold_c50: (v50 !== null && v50 !== undefined) ? v50 : 500,
               }};
 
               fetch("/gt/thresholds", {{
                 method: "POST",
                 headers: {{ "Content-Type": "application/json" }},
                 body: JSON.stringify(payload),
-              }}).catch(e => console.error("Failed to apply preset thresholds:", e));
+              }})
+                .then(() => {{
+                  initializeCharts();
+                  if (pollInterval) {{
+                    startGraphPolling();
+                  }}
+                }})
+                .catch(e => console.error("Failed to apply preset thresholds:", e));
             }}
 
             document.getElementById("threshold_preset").addEventListener("change", function() {{
               applyPreset(this.value);
             }});
 
-            ["threshold_c03","threshold_c50"].forEach(id => {{
-              document.getElementById(id).addEventListener("input", function() {{
-                this.dataset.lastValue = this.value;
-              }});
-            }});
-
             initializeCharts();
+            applyPreset("ISO_5");
             setInterval(pollLatest, 1000);
             setInterval(pollEnv, 1000);
             setInterval(pollState, 2000);
