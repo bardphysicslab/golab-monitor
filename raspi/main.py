@@ -483,9 +483,8 @@ def dashboard():
               return Math.floor((currentTime - sessionStartTime) / 1000);
             }}
 
-            function createOrUpdateChart(canvasId, data, thresholdFt3, sessionDurationSeconds) {{
+            function createOrUpdateChart(canvasId, data, thresholdM3, sessionDurationSeconds) {{
               const ctx = document.getElementById(canvasId).getContext("2d");
-              const thresholdM3 = thresholdFt3 * FT3_TO_M3;
               const dataPoints = [];
 
               data.forEach(d => {{
@@ -752,9 +751,11 @@ def start(settings: RunSettings):
     }
 
     def on_sample(parsed: Dict[str, Any]) -> None:
+        c03_m3 = round(parsed.get("c03", 0) * FT3_TO_M3)
+        c50_m3 = round(parsed.get("c50", 0) * FT3_TO_M3)
         with thresholds_lock:
-            exceeded_c03 = parsed.get("c03", 0) > thresholds.threshold_c03
-            exceeded_c50 = parsed.get("c50", 0) > thresholds.threshold_c50
+            exceeded_c03 = c03_m3 > thresholds.threshold_c03
+            exceeded_c50 = c50_m3 > thresholds.threshold_c50
         dp = SessionDataPoint(
             ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             c03=parsed.get("c03", 0),
