@@ -180,7 +180,7 @@ def dashboard():
         <title>GoLab Monitor</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
         <style>
-            :root {
+            :root {{
                 --bg: #000;
                 --panel: #111;
                 --panel-border: #333;
@@ -195,33 +195,35 @@ def dashboard():
                 --exceeded-bg: #3a1212;
                 --exceeded-text: #ffb3b3;
                 --grid: #333;
-            }
+            }}
 
-            body { font-family: system-ui; padding: 30px; max-width: 1600px; margin: 0 auto; background: var(--bg); color: var(--text); }
-            h1 { margin-bottom: 30px; color: var(--text); }
-            h3, h4, label, .graph-title { color: var(--text); }
+            body {{ font-family: system-ui; padding: 30px; max-width: 1600px; margin: 0 auto; background: var(--bg); color: var(--text); }}
+            h1 {{ margin-bottom: 30px; color: var(--text); }}
+            h3, h4, label, .graph-title {{ color: var(--text); }}
 
-            .controls-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; margin-bottom: 40px; }
-            @media (max-width: 900px) { .controls-row { grid-template-columns: 1fr; } }
+            .controls-row {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; margin-bottom: 40px; }}
+            @media (max-width: 900px) {{ .controls-row {{ grid-template-columns: 1fr; }} }}
 
-            label { display:block; margin-top: 12px; font-weight: 600; }
-            input { font-size: 16px; padding: 8px; width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--panel-border); border-radius: 6px; }
-            .card { padding: 20px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--panel); box-shadow: none; }
-            button { font-size: 18px; padding: 10px 16px; margin-right: 10px; cursor: pointer; background: var(--accent); color: white; border: none; border-radius: 6px; }
-            button:hover { background: var(--accent-hover); }
-            .muted { color: var(--muted); }
-            .small { font-size: 13px; }
-            .ok { color: var(--ok); font-weight: 700; }
-            .bad { color: var(--bad); font-weight: 700; }
+            label {{ display:block; margin-top: 12px; font-weight: 600; }}
+            input {{ font-size: 16px; padding: 8px; width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--panel-border); border-radius: 6px; }}
+            .card {{ padding: 20px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--panel); box-shadow: none; }}
+            button {{ font-size: 18px; padding: 10px 16px; margin-right: 10px; cursor: pointer; background: var(--accent); color: white; border: none; border-radius: 6px; }}
+            button:hover {{ background: var(--accent-hover); }}
+            .muted {{ color: var(--muted); }}
+            .small {{ font-size: 13px; }}
+            .ok {{ color: var(--ok); font-weight: 700; }}
+            .bad {{ color: var(--bad); font-weight: 700; }}
 
-            .graph-card { padding: 20px; border: 1px solid var(--panel-border); border-radius: 10px; background: var(--panel); }
-            .graph-title { font-size: 18px; font-weight: 700; margin-bottom: 15px; }
-            .graph-container { position: relative; height: 400px; margin-bottom: 15px; }
-            .threshold-status { display: inline-block; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-top: 10px; }
-            .threshold-status.safe { background: var(--safe-bg); color: var(--safe-text); }
-            .threshold-status.exceeded { background: var(--exceeded-bg); color: var(--exceeded-text); }
-            .env-grid { display:grid; grid-template-columns: repeat(5, 1fr); gap:20px; }
-            @media (max-width: 900px) { .env-grid { grid-template-columns: repeat(2, 1fr); } }
+            .graph-card {{ padding: 20px; border: 1px solid var(--panel-border); border-radius: 10px; background: var(--panel); }}
+            .graph-title {{ font-size: 18px; font-weight: 700; margin-bottom: 15px; }}
+            .graph-container {{ position: relative; height: 400px; margin-bottom: 15px; }}
+
+            .threshold-status {{ display: inline-block; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-top: 10px; }}
+            .threshold-status.safe {{ background: var(--safe-bg); color: var(--safe-text); }}
+            .threshold-status.exceeded {{ background: var(--exceeded-bg); color: var(--exceeded-text); }}
+
+            .env-grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap:20px; }}
+            @media (max-width: 900px) {{ .env-grid {{ grid-template-columns: repeat(2, 1fr); }} }}
         </style>
     </head>
     <body>
