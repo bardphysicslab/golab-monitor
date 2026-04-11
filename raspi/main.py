@@ -683,25 +683,18 @@ def dashboard():
             const CLEANROOM_PRESETS = {json.dumps(CLEANROOM_STANDARDS.get("iso_14644_1", {}))};
 
             function applyPreset(presetKey) {{
-              const c03Input = document.getElementById("threshold_c03");
-              const c50Input = document.getElementById("threshold_c50");
-
               const preset = CLEANROOM_PRESETS[presetKey];
               if (!preset) return;
 
-              const v03 = preset["0.3"];
-              const v50 = preset["5.0"];
+              const v03 = (preset["0.3"] !== null && preset["0.3"] !== undefined) ? preset["0.3"] : null;
+              const v50 = (preset["5.0"] !== null && preset["5.0"] !== undefined) ? preset["5.0"] : null;
 
-              if (v03 !== null && v03 !== undefined) {{
-                c03Input.value = v03;
-              }}
-              if (v50 !== null && v50 !== undefined) {{
-                c50Input.value = v50;
-              }}
+              document.getElementById("threshold_c03").value = v03 !== null ? v03 : "";
+              document.getElementById("threshold_c50").value = v50 !== null ? v50 : "";
 
               const payload = {{
-                threshold_c03: parseInt(c03Input.value),
-                threshold_c50: parseInt(c50Input.value),
+                threshold_c03: v03 !== null ? v03 : 999999,
+                threshold_c50: v50 !== null ? v50 : 999999,
               }};
 
               fetch("/gt/thresholds", {{
@@ -711,14 +704,10 @@ def dashboard():
               }})
                 .then(async () => {{
                   const data = await fetchSessionData();
-
                   const s = getSettings();
                   const sessionDurationSeconds = (s.sample_time_s + s.hold_time_s) * s.samples;
-                  const tC03 = parseInt(document.getElementById("threshold_c03").value);
-                  const tC50 = parseInt(document.getElementById("threshold_c50").value);
-
-                  createOrUpdateChart("chart-c03", data, tC03, sessionDurationSeconds);
-                  createOrUpdateChart("chart-c50", data, tC50, sessionDurationSeconds);
+                  createOrUpdateChart("chart-c03", data, v03, sessionDurationSeconds);
+                  createOrUpdateChart("chart-c50", data, v50, sessionDurationSeconds);
                 }})
                 .catch(e => console.error("Failed to apply preset thresholds:", e));
             }}
