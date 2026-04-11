@@ -12,6 +12,7 @@ from typing import Dict, Any, List
 import httpx
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from drivers.gt521s_driver import GT521SDriver
@@ -49,6 +50,7 @@ FT3_TO_M3 = 35.3147
 PMS_0P1L_TO_M3 = 10000
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 # =========================
 # CLEANROOM STANDARDS
@@ -247,7 +249,13 @@ def dashboard():
         </style>
     </head>
     <body>
-        <h1>GT-521S Particle Monitor</h1>
+        <div style="display:flex; align-items:center; gap:20px; margin-bottom:24px;">
+          <img src="/static/Bard-Web-Logos/bard-logo-red.png" style="height:60px;"/>
+          <div>
+            <h1 style="margin:0; font-size:28px;">Gravitational-wave Optics Lab Environmental Monitor</h1>
+            <div style="color:var(--muted); font-size:15px; margin-top:4px;">GT-521S Particle Counter</div>
+          </div>
+        </div>
 
         <div class="controls-row">
           <div class="card">
@@ -504,40 +512,42 @@ def dashboard():
               const chartId = canvasId === "chart-c03" ? 0 : 1;
               const existingChart = chartId === 0 ? chartC03 : chartC50;
 
-              const thresholdData = [
-                {{ x: 0, y: thresholdM3 }},
-                {{ x: sessionDurationSeconds, y: thresholdM3 }}
-              ];
-
               const chartConfig = {{
                 type: "scatter",
                 data: {{
-                  datasets: [
-                    {{
-                      label: "Particle Count",
-                      data: dataPoints.map(p => ({{ x: p.x, y: p.y }})),
-                      backgroundColor: dataPoints.map(p => p.color),
-                      borderWidth: 0,
-                      pointRadius: 4,
-                      pointBorderColor: dataPoints.map(p => p.color),
-                      pointBorderWidth: 1,
-                      showLine: true,
-                      borderColor: "#4da3ff",
-                      fill: false,
-                      borderWidth: 2,
-                      tension: 0.2,
-                    }},
-                    {{
-                      label: "Threshold",
-                      data: thresholdData,
-                      borderColor: "#ff6b6b",
-                      borderDash: [5, 5],
-                      borderWidth: 2,
-                      pointRadius: 0,
-                      showLine: true,
-                      fill: false,
-                    }},
-                  ],
+                  datasets: (() => {{
+                    const datasets = [
+                      {{
+                        label: "Particle Count",
+                        data: dataPoints.map(p => ({{ x: p.x, y: p.y }})),
+                        backgroundColor: dataPoints.map(p => p.color),
+                        borderWidth: 0,
+                        pointRadius: 4,
+                        pointBorderColor: dataPoints.map(p => p.color),
+                        pointBorderWidth: 1,
+                        showLine: true,
+                        borderColor: "#4da3ff",
+                        fill: false,
+                        tension: 0.2,
+                      }}
+                    ];
+                    if (thresholdM3 !== null && thresholdM3 !== undefined && !Number.isNaN(thresholdM3)) {{
+                      datasets.push({{
+                        label: "Threshold",
+                        data: [
+                          {{ x: 0, y: thresholdM3 }},
+                          {{ x: sessionDurationSeconds, y: thresholdM3 }}
+                        ],
+                        borderColor: "#ff6b6b",
+                        borderDash: [5, 5],
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        showLine: true,
+                        fill: false,
+                      }});
+                    }}
+                    return datasets;
+                  }})(),
                 }},
                 options: {{
                   responsive: true,

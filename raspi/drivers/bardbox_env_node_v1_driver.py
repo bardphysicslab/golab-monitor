@@ -85,14 +85,32 @@ class BardboxEnvNodeV1Driver:
     # Public interface
     # ------------------------------------------------------------------
 
-    def connect(self) -> None:
-        """Open serial port and complete the full connection sequence."""
-        self._open()
-        self._send_info()
-        self._send_start()
-        self._read_hdr()
-        self._start_reader()
-        log.info("BardboxEnvNode: connected uid=%s", self._info.get("uid"))
+    def connect(self, retries: int = 3, retry_delay: float = 5.0) -> None:
+        """Open serial port and complete the full connection sequence with retries."""
+        for attempt in range(1, retries + 1):
+            try:
+                self._open()
+                self._send_info()
+                self._send_start()
+                self._read_hdr()
+                self._start_reader()
+                log.info("BardboxEnvNode: connected uid=%s", self._info.get("uid"))
+                return
+            except Exception as e:
+                log.warning(
+                    "BardboxEnvNode: connect attempt %d/%d failed: %s",
+                    attempt, retries, e,
+                )
+                if self._ser and self._ser.is_open:
+                    try:
+                        self._ser.close()
+                    except Exception:
+                        pass
+                    self._ser = None
+                if attempt < retries:
+                    log.info("BardboxEnvNode: retrying in %.1fs...", retry_delay)
+                    time.sleep(retry_delay)
+        log.error("BardboxEnvNode: all %d connect attempts failed", retries)
 
     def get_info(self) -> dict:
         return {
