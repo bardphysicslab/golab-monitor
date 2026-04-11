@@ -226,6 +226,10 @@ def dashboard():
             .controls-row {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; margin-bottom: 40px; }}
             @media (max-width: 900px) {{ .controls-row {{ grid-template-columns: 1fr; }} }}
 
+            .gt-card {{ padding: 20px; border: 1px solid var(--panel-border); border-radius: 10px; background: var(--panel); margin-bottom: 30px; }}
+            .gt-card-inner {{ display: grid; grid-template-columns: 320px 1fr 1fr; gap: 30px; }}
+            @media (max-width: 1100px) {{ .gt-card-inner {{ grid-template-columns: 1fr; }} }}
+
             label {{ display:block; margin-top: 12px; font-weight: 600; }}
             input {{ font-size: 16px; padding: 8px; width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--panel-border); border-radius: 6px; }}
             .card {{ padding: 20px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--panel); box-shadow: none; }}
@@ -249,78 +253,80 @@ def dashboard():
         </style>
     </head>
     <body>
-        <div style="display:flex; align-items:center; gap:20px; margin-bottom:24px;">
+        <div style="display:flex; align-items:center; gap:20px; margin-bottom:30px;">
           <img src="/static/Bard-Web-Logos/bard-logo-red.png" style="height:60px;"/>
-          <div>
-            <h1 style="margin:0; font-size:28px;">Gravitational-wave Optics Lab Environmental Monitor</h1>
-            <div style="color:var(--muted); font-size:15px; margin-top:4px;">GT-521S Particle Counter</div>
-          </div>
+          <h1 style="margin:0; font-size:28px;">Gravitational-wave Optics Lab Environmental Monitor</h1>
         </div>
 
-        <div class="controls-row">
-          <div class="card">
-            <h3>Run settings</h3>
+        <div class="gt-card">
+          <h3 style="margin-top:0; margin-bottom:20px;">GT-521S Particle Counter</h3>
+          <div class="gt-card-inner">
 
-            <label>Sample Time (seconds)</label>
-            <input id="sample_time_s" type="number" min="1" max="9999" value="{s.sample_time_s}"/>
+            <div>
+              <h4 style="margin-top:0;">Run settings</h4>
 
-            <label>Hold Time (seconds)</label>
-            <input id="hold_time_s" type="number" min="0" max="9999" value="{s.hold_time_s}"/>
+              <label>Sample Time (seconds)</label>
+              <input id="sample_time_s" type="number" min="1" max="9999" value="{s.sample_time_s}"/>
 
-            <label>Samples (1–999)</label>
-            <input id="samples" type="number" min="1" max="999" value="{s.samples}"/>
+              <label>Hold Time (seconds)</label>
+              <input id="hold_time_s" type="number" min="0" max="9999" value="{s.hold_time_s}"/>
 
-            <h4 style="margin-top: 20px; margin-bottom: 15px; border-top: 1px solid #333; padding-top: 15px;">Threshold Settings</h4>
+              <label>Samples (1–999)</label>
+              <input id="samples" type="number" min="1" max="999" value="{s.samples}"/>
 
-            <label>Preset</label>
-            <select id="threshold_preset" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;">
-              <option value="ISO_1">ISO 1</option>
-              <option value="ISO_2">ISO 2</option>
-              <option value="ISO_3" selected>ISO 3</option>
-              <option value="ISO_4">ISO 4</option>
-              <option value="ISO_5">ISO 5</option>
-              <option value="ISO_6">ISO 6</option>
-              <option value="ISO_7">ISO 7</option>
-              <option value="ISO_8">ISO 8</option>
-              <option value="ISO_9">ISO 9</option>
-            </select>
+              <h4 style="margin-top: 20px; margin-bottom: 15px; border-top: 1px solid #333; padding-top: 15px;">Threshold Settings</h4>
 
-            <input id="threshold_c03" type="hidden" value="{default_c03}"/>
-            <input id="threshold_c50" type="hidden" value="{default_c50}"/>
+              <label>Preset</label>
+              <select id="threshold_preset" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;">
+                <option value="ISO_1">ISO 1</option>
+                <option value="ISO_2">ISO 2</option>
+                <option value="ISO_3" selected>ISO 3</option>
+                <option value="ISO_4">ISO 4</option>
+                <option value="ISO_5">ISO 5</option>
+                <option value="ISO_6">ISO 6</option>
+                <option value="ISO_7">ISO 7</option>
+                <option value="ISO_8">ISO 8</option>
+                <option value="ISO_9">ISO 9</option>
+              </select>
 
-            <p class="muted small" style="margin-top:12px;">
-              Start applies settings to the GT, then begins sampling.
-            </p>
+              <input id="threshold_c03" type="hidden" value="{default_c03}"/>
+              <input id="threshold_c50" type="hidden" value="{default_c50}"/>
 
-            <p>
-              <button onclick="startRun()">Start</button>
-              <button onclick="stopRun()">Stop</button>
-            </p>
+              <p class="muted small" style="margin-top:12px;">
+                Start applies settings to the GT, then begins sampling.
+              </p>
 
-            <div id="confirm" class="small muted">No action yet.</div>
-            <div id="last_update" class="small muted" style="margin-top:6px;"></div>
-          </div>
+              <p>
+                <button onclick="startRun()">Start</button>
+                <button onclick="stopRun()">Stop</button>
+              </p>
 
-          <div class="graph-card">
-            <div class="graph-title">0.3µm Particles</div>
-            <div style="font-size: 28px; font-weight: 700; color: var(--accent); margin-bottom: 15px;">
-              <span id="current_c03">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
+              <div id="confirm" class="small muted">No action yet.</div>
+              <div id="last_update" class="small muted" style="margin-top:6px;"></div>
             </div>
-            <div class="graph-container">
-              <canvas id="chart-c03"></canvas>
-            </div>
-            <div id="status-c03" class="threshold-status safe">✓ Below Threshold</div>
-          </div>
 
-          <div class="graph-card">
-            <div class="graph-title">5.0µm Particles</div>
-            <div style="font-size: 28px; font-weight: 700; color: var(--accent); margin-bottom: 15px;">
-              <span id="current_c50">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
+            <div>
+              <div class="graph-title">0.3µm Particles</div>
+              <div style="font-size: 28px; font-weight: 700; color: var(--accent); margin-bottom: 15px;">
+                <span id="current_c03">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
+              </div>
+              <div class="graph-container">
+                <canvas id="chart-c03"></canvas>
+              </div>
+              <div id="status-c03" class="threshold-status safe">✓ Below Threshold</div>
             </div>
-            <div class="graph-container">
-              <canvas id="chart-c50"></canvas>
+
+            <div>
+              <div class="graph-title">5.0µm Particles</div>
+              <div style="font-size: 28px; font-weight: 700; color: var(--accent); margin-bottom: 15px;">
+                <span id="current_c50">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
+              </div>
+              <div class="graph-container">
+                <canvas id="chart-c50"></canvas>
+              </div>
+              <div id="status-c50" class="threshold-status safe">✓ Below Threshold</div>
             </div>
-            <div id="status-c50" class="threshold-status safe">✓ Below Threshold</div>
+
           </div>
         </div>
 
@@ -651,8 +657,6 @@ def dashboard():
                   document.getElementById("samples").value = j.settings.samples;
                 }}
 
-                document.getElementById("threshold_c03").value = j.thresholds.threshold_c03;
-                document.getElementById("threshold_c50").value = j.thresholds.threshold_c50;
 
                 const c = document.getElementById("confirm");
                 if (j.run_active) {{
