@@ -171,6 +171,8 @@ session_manager = SessionManager()
 
 gt = GT521SDriver(uid=UID, port=PORT, baud=BAUD)
 
+time.sleep(3.0)  # let GT settle before opening Arduino port
+
 # =========================
 # ENV NODE DRIVER
 # =========================
