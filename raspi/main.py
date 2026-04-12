@@ -237,6 +237,7 @@ def dashboard():
             button:hover {{ background: var(--accent-hover); }}
             .muted {{ color: var(--muted); }}
             .small {{ font-size: 13px; }}
+            .header-clock {{ font-size: 15px; color: var(--muted); white-space: nowrap; }}
             .ok {{ color: var(--ok); font-weight: 700; }}
             .bad {{ color: var(--bad); font-weight: 700; }}
 
@@ -253,9 +254,12 @@ def dashboard():
         </style>
     </head>
     <body>
-        <div style="display:flex; align-items:center; gap:20px; margin-bottom:30px;">
-          <img src="/static/Bard-Web-Logos/bard-logo-red.png" style="height:60px;"/>
-          <h1 style="margin:0; font-size:28px;">Gravitational-wave Optics Lab Environmental Monitor</h1>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;">
+          <div style="display:flex; align-items:center; gap:20px;">
+            <img src="/static/Bard-Web-Logos/bard-logo-red.png" style="height:60px;"/>
+            <h1 style="margin:0; font-size:28px;">Gravitational-wave Optics Lab Environmental Monitor</h1>
+          </div>
+          <div id="header-clock" class="header-clock"></div>
         </div>
 
         <div class="gt-card">
@@ -726,7 +730,23 @@ def dashboard():
             setInterval(pollState, 2000);
             pollState();
             pollLatest();
-            pollEnv();
+
+            function updateHeaderClock() {{
+              const el = document.getElementById("header-clock");
+              if (!el) return;
+              const now = new Date();
+              el.textContent = now.toLocaleString("en-US", {{
+                weekday: "short",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: false
+              }});
+            }}
+            setInterval(updateHeaderClock, 1000);
+            updateHeaderClock();
         </script>
     </body>
     </html>
