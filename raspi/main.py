@@ -223,6 +223,11 @@ def dashboard():
             h1 {{ margin-bottom: 30px; color: var(--text); }}
             h3, h4, label, .graph-title {{ color: var(--text); }}
 
+            .header-row {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:30px; }}
+            .header-left {{ display:flex; align-items:center; gap:20px; }}
+            .header-title {{ margin:0; font-size:28px; line-height:1; color:var(--text); }}
+            .header-clock {{ font-size:18px; line-height:1; color:rgba(255,255,255,0.85); white-space:nowrap; }}
+
             .controls-row {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; margin-bottom: 40px; }}
             @media (max-width: 900px) {{ .controls-row {{ grid-template-columns: 1fr; }} }}
 
@@ -237,7 +242,6 @@ def dashboard():
             button:hover {{ background: var(--accent-hover); }}
             .muted {{ color: var(--muted); }}
             .small {{ font-size: 13px; }}
-            .header-clock {{ font-size: 15px; color: var(--muted); white-space: nowrap; }}
             .ok {{ color: var(--ok); font-weight: 700; }}
             .bad {{ color: var(--bad); font-weight: 700; }}
 
@@ -254,10 +258,10 @@ def dashboard():
         </style>
     </head>
     <body>
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;">
-          <div style="display:flex; align-items:center; gap:20px;">
+        <div class="header-row">
+          <div class="header-left">
             <img src="/static/Bard-Web-Logos/bard-logo-red.png" style="height:60px;"/>
-            <h1 style="margin:0; font-size:28px;">Gravitational-wave Optics Lab Environmental Monitor</h1>
+            <h1 class="header-title">Gravitational-wave Optics Lab Environmental Monitor</h1>
           </div>
           <div id="header-clock" class="header-clock"></div>
         </div>
@@ -306,7 +310,6 @@ def dashboard():
               </p>
 
               <div id="confirm" class="small muted">No action yet.</div>
-              <div id="last_update" class="small muted" style="margin-top:6px;"></div>
             </div>
 
             <div>
@@ -679,8 +682,6 @@ def dashboard():
                 }}
 
                 wasRunning = j.run_active;
-                const ts = new Date(j.last_update * 1000).toLocaleTimeString();
-                document.getElementById("last_update").textContent = `State as of ${{ts}}`;
               }} catch (e) {{}}
             }}
 
