@@ -341,7 +341,10 @@ def dashboard():
             <img src="/static/Bard-Web-Logos/bard-logo-red.png" style="height:60px;"/>
             <h1 class="header-title">Gravitational-wave Optics Lab Environmental Monitor</h1>
           </div>
-          <div id="header-clock" class="header-clock"></div>
+          <div style="text-align:right;">
+            <div id="header-clock" class="header-clock"></div>
+            <div id="time-warning" class="small muted" style="display:none; margin-top:6px;"></div>
+          </div>
         </div>
 
         <div class="gt-card">
@@ -386,8 +389,6 @@ def dashboard():
                 <button id="start-button" onclick="startRun()">Start</button>
                 <button onclick="stopRun()">Stop</button>
               </p>
-
-              <div id="time-warning" class="small bad" style="display:none; margin-bottom:15px;"></div>
 
               <div id="confirm" class="small muted">No action yet.</div>
             </div>
@@ -830,17 +831,20 @@ def dashboard():
                   if (warnEl) {{
                     warnEl.style.display = "none";
                     warnEl.textContent = "";
+                    warnEl.className = "small muted";
                   }}
                   if (startBtn) startBtn.disabled = false;
                 }} else if (j.source === "rtc_holdover") {{
                   if (warnEl) {{
                     warnEl.style.display = "block";
+                    warnEl.className = "small muted";
                     warnEl.textContent = "TIME OK — RTC holdover (NTP not currently synced)";
                   }}
                   if (startBtn) startBtn.disabled = false;
                 }} else {{
                   if (warnEl) {{
                     warnEl.style.display = "block";
+                    warnEl.className = "small bad";
                     warnEl.textContent = "TIME INVALID — RTC/NTP sync required before logging";
                   }}
                   if (startBtn) startBtn.disabled = true;
@@ -848,6 +852,7 @@ def dashboard():
               }} catch (e) {{
                 if (warnEl) {{
                   warnEl.style.display = "block";
+                  warnEl.className = "small bad";
                   warnEl.textContent = "TIME STATUS UNKNOWN — backend time check failed";
                 }}
                 if (startBtn) startBtn.disabled = true;
