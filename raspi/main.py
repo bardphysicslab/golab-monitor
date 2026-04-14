@@ -8,7 +8,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import httpx
 from fastapi import FastAPI, WebSocket
@@ -45,6 +45,10 @@ DEFAULT_LOCATION_ID = 1
 DEFAULT_SAMPLE_TIME_S = 10
 DEFAULT_HOLD_TIME_S = 50
 DEFAULT_SAMPLES = 480
+
+DATA_DIR = Path.home() / "golab-monitor" / "data"
+GT_SESSIONS_DIR = DATA_DIR / "sessions"
+ENV_DAILY_AVERAGES_PATH = DATA_DIR / "env_daily_averages.jsonl"
 
 # Unit conversions for UI only
 FT3_TO_M3 = 35.3147
@@ -128,6 +132,159 @@ def time_status(force_refresh: bool = False) -> dict:
 
 def system_time_valid() -> bool:
     return time_status()["valid"]
+
+def ensure_data_dirs() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    GT_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+def append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
+    ensure_data_dirs()
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(obj, separators=(",", ":"), default=str))
+        f.write("\n")
+
+def local_date_str(dt: Optional[datetime] = None) -> str:
+    if dt is None:
+        dt = utc_now()
+    return dt.astimezone().date().isoformat()
+
+class EnvDailyAccumulator:
+    def __init__(self, output_path: Path):
+        self.output_path = output_path
+        self.lock = threading.Lock()
+        self._nodes: Dict[str, Dict[str, Any]] = {}
+
+    def update(self, reading: Optional[Dict[str, Any]]) -> None:
+        if not reading:
+            return
+
+        uid = reading.get("uid") or "env1"
+        now_date = local_date_str()
+
+        with self.lock:
+            node = self._nodes.get(uid)
+            if node is None:
+                node = self._new_node(now_date)
+                self._nodes[uid] = node
+            elif node["date_local"] != now_date:
+                self._write_summary_locked(uid, node)
+                node = self._new_node(now_date)
+                self._nodes[uid] = node
+
+            node["latest"] = reading
+            reading_ts = reading.get("timestamp")
+            if reading_ts and reading_ts == node.get("last_timestamp"):
+                return
+
+            values = self._numeric_values(reading)
+            if not values:
+                return
+
+            for key, value in values.items():
+                node["sums"][key] = node["sums"].get(key, 0.0) + value
+                node["counts"][key] = node["counts"].get(key, 0) + 1
+            node["samples"] += 1
+            node["last_timestamp"] = reading_ts
+
+    def latest(self, uid: str = "env1") -> Optional[Dict[str, Any]]:
+        with self.lock:
+            node = self._nodes.get(uid)
+            if node is None:
+                return None
+            return node.get("latest")
+
+    def _new_node(self, date_local: str) -> Dict[str, Any]:
+        return {
+            "date_local": date_local,
+            "samples": 0,
+            "sums": {},
+            "counts": {},
+            "latest": None,
+            "last_timestamp": None,
+        }
+
+    def _numeric_values(self, reading: Dict[str, Any]) -> Dict[str, float]:
+        data = reading.get("data") or {}
+        extended = reading.get("extended") or {}
+        values: Dict[str, float] = {}
+        for source_key, avg_key in (
+            ("temp_c", "temp_c_avg"),
+            ("rh_pct", "rh_pct_avg"),
+            ("c03", "c03_avg"),
+            ("c05", "c05_avg"),
+            ("c10", "c10_avg"),
+        ):
+            value = data.get(source_key)
+            if value is None:
+                value = extended.get(source_key)
+            if isinstance(value, (int, float)):
+                values[avg_key] = float(value)
+        return values
+
+    def _write_summary_locked(self, uid: str, node: Dict[str, Any]) -> None:
+        if node["samples"] <= 0:
+            return
+
+        averaged = {}
+        for key, total in node["sums"].items():
+            count = node["counts"].get(key, 0)
+            if count:
+                averaged[key] = total / count
+
+        latest = node.get("latest") or {}
+        append_jsonl(self.output_path, {
+            "date_local": node["date_local"],
+            "generated_at_utc": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "uid": uid,
+            "status": latest.get("status", "unknown"),
+            "samples": node["samples"],
+            "data": averaged,
+            "extended": {},
+            "raw": None,
+        })
+
+
+class GTSessionWriter:
+    def __init__(self, sessions_dir: Path):
+        self.sessions_dir = sessions_dir
+        self.lock = threading.Lock()
+        self.active_path: Optional[Path] = None
+
+    def start(self, start_utc: str) -> Path:
+        ensure_data_dirs()
+        path = self.sessions_dir / f"gt_session_{start_utc}.jsonl"
+        with self.lock:
+            self.active_path = path
+        path.touch(exist_ok=True)
+        return path
+
+    def stop(self) -> None:
+        with self.lock:
+            self.active_path = None
+
+    def append_sample(
+        self,
+        session_ts_utc: str,
+        gt_reading: Optional[Dict[str, Any]],
+        env_reading: Optional[Dict[str, Any]],
+    ) -> None:
+        with self.lock:
+            path = self.active_path
+        if path is None:
+            return
+
+        append_jsonl(path, {
+            "session_ts_utc": session_ts_utc,
+            "devices": {
+                "gt521": gt_reading,
+                "env1": env_reading,
+            },
+        })
+
+
+ensure_data_dirs()
+env_daily_accumulator = EnvDailyAccumulator(ENV_DAILY_AVERAGES_PATH)
+gt_session_writer = GTSessionWriter(GT_SESSIONS_DIR)
 
 # =========================
 # CLEANROOM STANDARDS
@@ -888,13 +1045,14 @@ def start(settings: RunSettings):
     }
 
     def on_sample(parsed: Dict[str, Any]) -> None:
+        session_ts_utc = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
         c03_m3 = round(parsed.get("c03", 0) * FT3_TO_M3)
         c50_m3 = round(parsed.get("c50", 0) * FT3_TO_M3)
         with thresholds_lock:
             exceeded_c03 = c03_m3 > thresholds.threshold_c03
             exceeded_c50 = c50_m3 > thresholds.threshold_c50
         dp = SessionDataPoint(
-            ts=utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ts=session_ts_utc,
             c03=parsed.get("c03", 0),
             c50=parsed.get("c50", 0),
             exceeded_c03=exceeded_c03,
@@ -902,10 +1060,25 @@ def start(settings: RunSettings):
         )
         session_manager.append(dp)
 
+        try:
+            env_reading = env.get_reading()
+            env_daily_accumulator.update(env_reading)
+        except Exception:
+            log.exception("ENV: failed to read latest sample for GT session record")
+            env_reading = env_daily_accumulator.latest()
+
+        gt_session_writer.append_sample(
+            session_ts_utc=session_ts_utc,
+            gt_reading=gt.get_reading(),
+            env_reading=env_reading,
+        )
+
     try:
         result = gt.start_session(settings_dict, on_sample=on_sample)
         session_id = session_manager.start(metadata=settings_dict)
+        session_path = gt_session_writer.start(applied_at)
         log.info("GT: session started — id=%s", session_id)
+        log.info("GT: local session file — %s", session_path)
         return JSONResponse({
             "ok": True,
             "session_id": session_id,
@@ -920,6 +1093,7 @@ def start(settings: RunSettings):
         })
     except Exception as e:
         log.exception("GT: start_session failed")
+        gt_session_writer.stop()
         session_manager.error(str(e))
         return JSONResponse({
             "ok": False,
@@ -932,6 +1106,7 @@ def start(settings: RunSettings):
 def stop():
     at = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
     result = gt.stop()
+    gt_session_writer.stop()
     session_manager.complete()
     log.info("GT: session stopped — stopped=%s op=%s", result.get("stopped"), result.get("op_status"))
     return JSONResponse({"ok": result.get("stopped", False), "at": at})
@@ -943,7 +1118,9 @@ def get_latest():
 @app.get("/env/latest")
 def get_env_latest():
     try:
-        return JSONResponse({"latest": env.get_reading()})
+        reading = env.get_reading()
+        env_daily_accumulator.update(reading)
+        return JSONResponse({"latest": reading})
     except Exception as e:
         return JSONResponse({"latest": None, "error": str(e)})
 
