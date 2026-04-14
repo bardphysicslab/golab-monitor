@@ -154,6 +154,9 @@ def local_date_str(dt: Optional[datetime] = None) -> str:
         dt = utc_now()
     return dt.astimezone().date().isoformat()
 
+def safe_timestamp_for_filename(ts_utc: str) -> str:
+    return ts_utc.replace(":", "-")
+
 class EnvDailyAccumulator:
     def __init__(self, output_path: Path):
         self.output_path = output_path
@@ -277,7 +280,8 @@ class GTSessionWriter:
 
     def start(self, start_utc: str) -> Path:
         ensure_data_dirs()
-        path = self.sessions_dir / f"gt_session_{start_utc}.jsonl"
+        safe_ts = safe_timestamp_for_filename(start_utc)
+        path = self.sessions_dir / f"gt_session_{safe_ts}.jsonl"
         with self.lock:
             self.active_path = path
         path.touch(exist_ok=True)
