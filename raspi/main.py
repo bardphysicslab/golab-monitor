@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import subprocess
 import sys
 import time
 import threading
@@ -51,6 +52,82 @@ PMS_0P1L_TO_M3 = 10000
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+_TIME_STATUS_CACHE: dict | None = None
+_TIME_STATUS_CACHE_TS: float = 0.0
+_TIME_STATUS_CACHE_TTL_S = 5.0
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+def system_time_sane() -> bool:
+    # Reject obviously bad time like 1970.
+    return utc_now().year >= 2025
+
+def ntp_synced() -> bool:
+    try:
+        result = subprocess.run(
+            ["chronyc", "tracking"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+        return any(
+            "Leap status" in line and "Normal" in line
+            for line in result.stdout.splitlines()
+        )
+    except Exception:
+        return False
+
+def _compute_time_status() -> dict:
+    sane = system_time_sane()
+    synced = ntp_synced()
+
+    if sane and synced:
+        return {
+            "valid": True,
+            "sane": True,
+            "ntp_synced": True,
+            "source": "ntp",
+        }
+
+    if sane and not synced:
+        # Accept sane RTC-backed/offline holdover time.
+        return {
+            "valid": True,
+            "sane": True,
+            "ntp_synced": False,
+            "source": "rtc_holdover",
+        }
+
+    return {
+        "valid": False,
+        "sane": False,
+        "ntp_synced": False,
+        "source": "invalid",
+    }
+
+def time_status(force_refresh: bool = False) -> dict:
+    global _TIME_STATUS_CACHE, _TIME_STATUS_CACHE_TS
+
+    now_ts = time.time()
+    if (
+        not force_refresh
+        and _TIME_STATUS_CACHE is not None
+        and (now_ts - _TIME_STATUS_CACHE_TS) < _TIME_STATUS_CACHE_TTL_S
+    ):
+        return _TIME_STATUS_CACHE
+
+    status = _compute_time_status()
+    _TIME_STATUS_CACHE = status
+    _TIME_STATUS_CACHE_TS = now_ts
+    return status
+
+def system_time_valid() -> bool:
+    return time_status()["valid"]
 
 # =========================
 # CLEANROOM STANDARDS
@@ -124,7 +201,7 @@ class SessionManager:
                 "uid": UID,
                 "session_id": session_id,
                 "status": "running",
-                "start_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "start_time": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "end_time": None,
                 "metadata": metadata,
                 "summary": {},
@@ -139,7 +216,7 @@ class SessionManager:
     def complete(self) -> None:
         with self.lock:
             self._session["status"] = "complete"
-            self._session["end_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            self._session["end_time"] = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
             self._session["summary"] = {
                 "total_samples": len(self._session["data"]),
             }
@@ -147,7 +224,7 @@ class SessionManager:
     def error(self, reason: str) -> None:
         with self.lock:
             self._session["status"] = "error"
-            self._session["end_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            self._session["end_time"] = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
             self._session["summary"] = {"error": reason}
 
     def get_data(self) -> List[SessionDataPoint]:
@@ -240,6 +317,7 @@ def dashboard():
             .card {{ padding: 20px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--panel); box-shadow: none; }}
             button {{ font-size: 18px; padding: 10px 16px; margin-right: 10px; cursor: pointer; background: var(--accent); color: white; border: none; border-radius: 6px; }}
             button:hover {{ background: var(--accent-hover); }}
+            button:disabled {{ opacity: 0.5; cursor: not-allowed; }}
             .muted {{ color: var(--muted); }}
             .small {{ font-size: 13px; }}
             .ok {{ color: var(--ok); font-weight: 700; }}
@@ -305,9 +383,11 @@ def dashboard():
               </p>
 
               <p>
-                <button onclick="startRun()">Start</button>
+                <button id="start-button" onclick="startRun()">Start</button>
                 <button onclick="stopRun()">Stop</button>
               </p>
+
+              <div id="time-warning" class="small bad" style="display:none; margin-bottom:15px;"></div>
 
               <div id="confirm" class="small muted">No action yet.</div>
             </div>
@@ -414,11 +494,13 @@ def dashboard():
                   body: JSON.stringify(settings),
                 }});
 
-                if (!r.ok) {{
-                  throw new Error(`HTTP ${{r.status}}`);
-                }}
-
                 const j = await r.json();
+
+                if (!r.ok) {{
+                  c.className = "small bad";
+                  c.textContent = j.error || `Start failed (HTTP ${{r.status}})`;
+                  return;
+                }}
 
                 if (j.ok) {{
                   c.className = "small ok";
@@ -426,7 +508,7 @@ def dashboard():
                   startGraphPolling();
                 }} else {{
                   c.className = "small bad";
-                  c.textContent = `Start failed @ ${{j.applied_at}}`;
+                  c.textContent = j.error || `Start failed @ ${{j.applied_at}}`;
                 }}
               }} catch (e) {{
                 c.className = "small bad";
@@ -732,19 +814,44 @@ def dashboard():
             pollState();
             pollLatest();
 
-            function updateHeaderClock() {{
-              const el = document.getElementById("header-clock");
-              if (!el) return;
-              const now = new Date();
-              el.textContent = now.toLocaleString("en-US", {{
-                weekday: "short",
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-                hour12: false
-              }});
+            async function updateHeaderClock() {{
+              const clockEl = document.getElementById("header-clock");
+              const warnEl = document.getElementById("time-warning");
+              const startBtn = document.getElementById("start-button");
+              if (!clockEl) return;
+
+              try {{
+                const r = await fetch("/time");
+                const j = await r.json();
+
+                clockEl.textContent = j.local || "—";
+
+                if (j.source === "ntp") {{
+                  if (warnEl) {{
+                    warnEl.style.display = "none";
+                    warnEl.textContent = "";
+                  }}
+                  if (startBtn) startBtn.disabled = false;
+                }} else if (j.source === "rtc_holdover") {{
+                  if (warnEl) {{
+                    warnEl.style.display = "block";
+                    warnEl.textContent = "TIME OK — RTC holdover (NTP not currently synced)";
+                  }}
+                  if (startBtn) startBtn.disabled = false;
+                }} else {{
+                  if (warnEl) {{
+                    warnEl.style.display = "block";
+                    warnEl.textContent = "TIME INVALID — RTC/NTP sync required before logging";
+                  }}
+                  if (startBtn) startBtn.disabled = true;
+                }}
+              }} catch (e) {{
+                if (warnEl) {{
+                  warnEl.style.display = "block";
+                  warnEl.textContent = "TIME STATUS UNKNOWN — backend time check failed";
+                }}
+                if (startBtn) startBtn.disabled = true;
+              }}
             }}
             setInterval(updateHeaderClock, 1000);
             updateHeaderClock();
@@ -760,8 +867,14 @@ def dashboard():
 @app.post("/gt/start")
 def start(settings: RunSettings):
     global current_settings
+    if not system_time_valid():
+        return JSONResponse({
+            "ok": False,
+            "error": "System time invalid; RTC/NTP sync required before logging."
+        }, status_code=503)
+
     current_settings = settings
-    applied_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    applied_at = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     settings_dict = {
         "sample_time_s": settings.sample_time_s,
@@ -776,7 +889,7 @@ def start(settings: RunSettings):
             exceeded_c03 = c03_m3 > thresholds.threshold_c03
             exceeded_c50 = c50_m3 > thresholds.threshold_c50
         dp = SessionDataPoint(
-            ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ts=utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
             c03=parsed.get("c03", 0),
             c50=parsed.get("c50", 0),
             exceeded_c03=exceeded_c03,
@@ -812,7 +925,7 @@ def start(settings: RunSettings):
 
 @app.post("/gt/stop")
 def stop():
-    at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    at = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
     result = gt.stop()
     session_manager.complete()
     log.info("GT: session stopped — stopped=%s op=%s", result.get("stopped"), result.get("op_status"))
@@ -873,13 +986,35 @@ def get_state():
             "threshold_c03": thresholds.threshold_c03,
             "threshold_c50": thresholds.threshold_c50,
         }
+    status = time_status()
     state = gt.get_state()
     state.update({
         "settings": current_settings.dict(),
         "thresholds": t,
         "last_update": time.time(),
+        "time": {
+            "utc": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "valid": status["valid"],
+            "sane": status["sane"],
+            "ntp_synced": status["ntp_synced"],
+            "source": status["source"],
+        },
     })
     return JSONResponse(state)
+
+@app.get("/time")
+def get_time():
+    now_utc = utc_now()
+    now_local = now_utc.astimezone()
+    status = time_status()
+    return JSONResponse({
+        "utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "local": now_local.strftime("%a %b %-d, %-I:%M:%S %p"),
+        "valid": status["valid"],
+        "sane": status["sane"],
+        "ntp_synced": status["ntp_synced"],
+        "source": status["source"],
+    })
 
 # =========================
 # OUTDOOR TEMP WEBSOCKET
