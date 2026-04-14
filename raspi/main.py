@@ -38,7 +38,8 @@ ENV_BAUD = 115200
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast?latitude=41.93&longitude=-73.91&current_weather=true"
 
-UID = "bb-0001"
+ENV1_UID = "bb-0001"
+GT_UID = "bb-0002"
 
 DEFAULT_LOCATION_LABEL = "GoLab"
 DEFAULT_LOCATION_ID = 1
@@ -143,6 +144,11 @@ def append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
         f.write(json.dumps(obj, separators=(",", ":"), default=str))
         f.write("\n")
 
+def get_env_reading() -> Dict[str, Any]:
+    reading = env.get_reading()
+    reading["uid"] = ENV1_UID
+    return reading
+
 def local_date_str(dt: Optional[datetime] = None) -> str:
     if dt is None:
         dt = utc_now()
@@ -186,12 +192,31 @@ class EnvDailyAccumulator:
             node["samples"] += 1
             node["last_timestamp"] = reading_ts
 
-    def latest(self, uid: str = "env1") -> Optional[Dict[str, Any]]:
+    def latest(self, uid: str = ENV1_UID) -> Optional[Dict[str, Any]]:
         with self.lock:
             node = self._nodes.get(uid)
             if node is None:
                 return None
             return node.get("latest")
+
+    def current_averages(self, uid: str = ENV1_UID) -> Dict[str, float]:
+        key_map = {
+            "temp_c_avg": "temp_c",
+            "rh_pct_avg": "rh_pct",
+            "c03_avg": "c03",
+            "c05_avg": "c05",
+            "c10_avg": "c10",
+        }
+        with self.lock:
+            node = self._nodes.get(uid)
+            if node is None:
+                return {}
+            averages = {}
+            for avg_key, api_key in key_map.items():
+                count = node["counts"].get(avg_key, 0)
+                if count:
+                    averages[api_key] = node["sums"][avg_key] / count
+            return averages
 
     def _new_node(self, date_local: str) -> Dict[str, Any]:
         return {
@@ -341,7 +366,7 @@ class SessionManager:
     @staticmethod
     def _empty_session() -> Dict[str, Any]:
         return {
-            "uid": UID,
+            "uid": GT_UID,
             "session_id": None,
             "status": "idle",
             "start_time": None,
@@ -355,7 +380,7 @@ class SessionManager:
         with self.lock:
             session_id = str(uuid.uuid4())
             self._session = {
-                "uid": UID,
+                "uid": GT_UID,
                 "session_id": session_id,
                 "status": "running",
                 "start_time": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -405,7 +430,7 @@ session_manager = SessionManager()
 # GT-521S DRIVER
 # =========================
 
-gt = GT521SDriver(uid=UID, port=PORT, baud=BAUD)
+gt = GT521SDriver(uid=GT_UID, port=PORT, baud=BAUD)
 
 time.sleep(3.0)  # let GT settle before opening Arduino port
 
@@ -578,11 +603,11 @@ def dashboard():
         <div class="card" style="margin-top: 20px;">
           <h3>Environment Node (trend only)</h3>
           <div class="env-grid">
-            <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_c03" style="font-size:28px;font-weight:700;">—</div></div>
-            <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_c05" style="font-size:28px;font-weight:700;">—</div></div>
-            <div><div class="small muted">&gt;1.0µm /m³</div><div id="env_c10" style="font-size:28px;font-weight:700;">—</div></div>
-            <div><div class="small muted">Temp (°C)</div><div id="env_temp" style="font-size:28px;font-weight:700;">—</div></div>
-            <div><div class="small muted">RH (%)</div><div id="env_rh" style="font-size:28px;font-weight:700;">—</div></div>
+            <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_c03" style="font-size:28px;font-weight:700;">—</div><div id="env_c03_avg" class="small muted">Avg: —</div></div>
+            <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_c05" style="font-size:28px;font-weight:700;">—</div><div id="env_c05_avg" class="small muted">Avg: —</div></div>
+            <div><div class="small muted">&gt;1.0µm /m³</div><div id="env_c10" style="font-size:28px;font-weight:700;">—</div><div id="env_c10_avg" class="small muted">Avg: —</div></div>
+            <div><div class="small muted">Temp (°C)</div><div id="env_temp" style="font-size:28px;font-weight:700;">—</div><div id="env_temp_avg" class="small muted">Avg: —</div></div>
+            <div><div class="small muted">RH (%)</div><div id="env_rh" style="font-size:28px;font-weight:700;">—</div><div id="env_rh_avg" class="small muted">Avg: —</div></div>
           </div>
         </div>
 
@@ -603,6 +628,10 @@ def dashboard():
             function pmsCountToM3(value) {{
               if (value === null || value === undefined) return null;
               return value * PMS_0P1L_TO_M3;
+            }}
+
+            function avgText(value) {{
+              return value === null || value === undefined ? "Avg: —" : `Avg: ${{Number(value).toFixed(2)}}`;
             }}
 
             function initializeCharts() {{
@@ -713,12 +742,19 @@ def dashboard():
                 if (j && j.latest) {{
                   const d = j.latest.data || {{}};
                   const x = j.latest.extended || {{}};
+                  const avg = j.averages || {{}};
 
                   document.getElementById("env_c03").textContent = (pmsCountToM3(d.c03) ?? "—").toString();
                   document.getElementById("env_c05").textContent = (pmsCountToM3(x.c05) ?? "—").toString();
                   document.getElementById("env_c10").textContent = (pmsCountToM3(x.c10) ?? "—").toString();
                   document.getElementById("env_temp").textContent = (d.temp_c ?? "—").toString();
                   document.getElementById("env_rh").textContent = (x.rh_pct ?? "—").toString();
+
+                  document.getElementById("env_c03_avg").textContent = avgText(pmsCountToM3(avg.c03));
+                  document.getElementById("env_c05_avg").textContent = avgText(pmsCountToM3(avg.c05));
+                  document.getElementById("env_c10_avg").textContent = avgText(pmsCountToM3(avg.c10));
+                  document.getElementById("env_temp_avg").textContent = avgText(avg.temp_c);
+                  document.getElementById("env_rh_avg").textContent = avgText(avg.rh_pct);
                 }}
               }} catch (e) {{}}
             }}
@@ -982,7 +1018,14 @@ def dashboard():
                 const r = await fetch("/time");
                 const j = await r.json();
 
-                clockEl.textContent = j.local || "—";
+                const d = new Date(j.utc);
+                const timeStr = d.toLocaleTimeString([], {{
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                  hour12: false
+                }});
+                clockEl.textContent = timeStr;
 
                 if (j.source === "ntp") {{
                   if (warnEl) {{
@@ -1061,7 +1104,7 @@ def start(settings: RunSettings):
         session_manager.append(dp)
 
         try:
-            env_reading = env.get_reading()
+            env_reading = get_env_reading()
             env_daily_accumulator.update(env_reading)
         except Exception:
             log.exception("ENV: failed to read latest sample for GT session record")
@@ -1118,11 +1161,18 @@ def get_latest():
 @app.get("/env/latest")
 def get_env_latest():
     try:
-        reading = env.get_reading()
+        reading = get_env_reading()
         env_daily_accumulator.update(reading)
-        return JSONResponse({"latest": reading})
+        return JSONResponse({
+            "latest": reading,
+            "averages": env_daily_accumulator.current_averages(),
+        })
     except Exception as e:
-        return JSONResponse({"latest": None, "error": str(e)})
+        return JSONResponse({
+            "latest": None,
+            "averages": env_daily_accumulator.current_averages(),
+            "error": str(e),
+        })
 
 @app.get("/gt/session-data")
 def get_session_data():
