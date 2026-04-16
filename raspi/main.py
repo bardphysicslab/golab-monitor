@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -50,6 +52,7 @@ DEFAULT_SAMPLES = 480
 DATA_DIR = Path.home() / "golab-monitor" / "data"
 GT_SESSIONS_DIR = DATA_DIR / "sessions"
 ENV_DAILY_AVERAGES_PATH = DATA_DIR / "env_daily_averages.jsonl"
+MEDIA_BASE_DIR = Path("/media/golab")
 
 # Unit conversions for UI only
 FT3_TO_M3 = 35.3147
@@ -156,6 +159,25 @@ def local_date_str(dt: Optional[datetime] = None) -> str:
 
 def safe_timestamp_for_filename(ts_utc: str) -> str:
     return ts_utc.replace(":", "-")
+
+def get_storage_targets() -> List[Dict[str, str]]:
+    if not MEDIA_BASE_DIR.exists():
+        return []
+    out = []
+    for p in sorted(MEDIA_BASE_DIR.iterdir()):
+        if p.is_dir() and os.access(p, os.W_OK):
+            out.append({"name": p.name, "path": str(p)})
+    return out
+
+def get_storage_target(path: str) -> Optional[Dict[str, str]]:
+    try:
+        requested = Path(path).resolve()
+    except Exception:
+        return None
+    for target in get_storage_targets():
+        if Path(target["path"]).resolve() == requested:
+            return target
+    return None
 
 class EnvDailyAccumulator:
     def __init__(self, output_path: Path):
@@ -278,10 +300,13 @@ class GTSessionWriter:
         self.lock = threading.Lock()
         self.active_path: Optional[Path] = None
 
-    def start(self, start_utc: str) -> Path:
+    def start(self, start_utc: str, sessions_dir: Optional[Path] = None) -> Path:
         ensure_data_dirs()
+        if sessions_dir is not None:
+            sessions_dir.mkdir(parents=True, exist_ok=True)
         safe_ts = safe_timestamp_for_filename(start_utc)
-        path = self.sessions_dir / f"gt_session_{safe_ts}.jsonl"
+        target_dir = sessions_dir or self.sessions_dir
+        path = target_dir / f"gt_session_{safe_ts}.jsonl"
         with self.lock:
             self.active_path = path
         path.touch(exist_ok=True)
@@ -314,6 +339,59 @@ class GTSessionWriter:
 ensure_data_dirs()
 env_daily_accumulator = EnvDailyAccumulator(ENV_DAILY_AVERAGES_PATH)
 gt_session_writer = GTSessionWriter(GT_SESSIONS_DIR)
+
+session_save_lock = threading.Lock()
+session_save_mode = "local"
+session_save_root = GT_SESSIONS_DIR
+session_save_display = "Local"
+session_save_mount: Optional[Path] = None
+
+def get_current_session_target() -> Dict[str, str]:
+    with session_save_lock:
+        selectable_path = str(session_save_mount) if session_save_mount is not None else str(session_save_root)
+        return {
+            "mode": session_save_mode,
+            "path": selectable_path,
+            "resolved_path": str(session_save_root),
+            "label": session_save_display,
+        }
+
+def set_session_target_local() -> Dict[str, str]:
+    global session_save_mode, session_save_root, session_save_display, session_save_mount
+    ensure_data_dirs()
+    with session_save_lock:
+        session_save_mode = "local"
+        session_save_root = GT_SESSIONS_DIR
+        session_save_display = "Local"
+        session_save_mount = None
+    return get_current_session_target()
+
+def set_session_target_usb(target: Dict[str, str]) -> Dict[str, str]:
+    global session_save_mode, session_save_root, session_save_display, session_save_mount
+    mount = Path(target["path"])
+    root = mount / "golab-monitor" / "sessions"
+    root.mkdir(parents=True, exist_ok=True)
+    with session_save_lock:
+        session_save_mode = "usb"
+        session_save_root = root
+        session_save_display = target["name"]
+        session_save_mount = mount
+    return get_current_session_target()
+
+def resolve_current_session_dir() -> tuple[Optional[Path], Optional[str]]:
+    with session_save_lock:
+        mode = session_save_mode
+        root = session_save_root
+        mount = session_save_mount
+    if mode == "local":
+        ensure_data_dirs()
+        return root, None
+    if mode == "usb" and mount is not None:
+        if get_storage_target(str(mount)) is None:
+            return None, "Selected USB session target is no longer mounted or writable."
+        root.mkdir(parents=True, exist_ok=True)
+        return root, None
+    return None, "Session save target is invalid."
 
 # =========================
 # CLEANROOM STANDARDS
@@ -349,6 +427,13 @@ class RunSettings(BaseModel):
     samples: int = Field(default=DEFAULT_SAMPLES, ge=1, le=999)
 
 current_settings = RunSettings()
+
+class SessionTargetRequest(BaseModel):
+    mode: str
+    path: Optional[str] = None
+
+class ExportDailyRequest(BaseModel):
+    path: str
 
 # =========================
 # SESSION DATA
@@ -643,12 +728,39 @@ def dashboard():
           </div>
         </div>
 
+        <div class="card" style="margin-top: 20px;">
+          <h3>Data & Export</h3>
+          <div class="controls-row" style="margin-bottom:0;">
+            <div>
+              <h4 style="margin-top:0;">Session Save Target</h4>
+              <div class="small muted" style="margin-bottom:8px;">Current: <span id="session-target-current">Local</span></div>
+              <select id="session-target-select" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;"></select>
+              <p>
+                <button id="set-session-target-button" onclick="setSessionTarget()">Set Session Target</button>
+                <button onclick="loadStorageTargets()">Refresh Drives</button>
+              </p>
+              <div id="session-target-status" class="small muted"></div>
+            </div>
+            <div>
+              <h4 style="margin-top:0;">Export Daily Averages</h4>
+              <div class="small muted" style="margin-bottom:8px;">Copies the local daily averages file to USB.</div>
+              <select id="export-target-select" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;"></select>
+              <p>
+                <button onclick="exportDailyAverages()">Export Daily Averages</button>
+                <button onclick="loadStorageTargets()">Refresh Drives</button>
+              </p>
+              <div id="export-status" class="small muted"></div>
+            </div>
+          </div>
+        </div>
+
         <script>
             let chartC03 = null;
             let chartC50 = null;
             let pollInterval = null;
             let wasRunning = false;
             let settingsInitialized = false;
+            let storageTargets = [];
 
             const FT3_TO_M3 = {FT3_TO_M3};
             const PMS_0P1L_TO_M3 = {PMS_0P1L_TO_M3};
@@ -960,6 +1072,122 @@ def dashboard():
               }}
             }}
 
+            function setStorageStatus(id, text, ok = true) {{
+              const el = document.getElementById(id);
+              if (!el) return;
+              el.className = ok ? "small ok" : "small bad";
+              el.textContent = text;
+            }}
+
+            function optionExists(selectEl, value) {{
+              return Array.from(selectEl.options).some(opt => opt.value === value);
+            }}
+
+            function populateStorageTargets(payload) {{
+              storageTargets = payload.targets || [];
+              const sessionSelect = document.getElementById("session-target-select");
+              const exportSelect = document.getElementById("export-target-select");
+              const currentEl = document.getElementById("session-target-current");
+              if (!sessionSelect || !exportSelect) return;
+
+              const previousSession = sessionSelect.value;
+              const previousExport = exportSelect.value;
+
+              sessionSelect.innerHTML = "";
+              const localOption = document.createElement("option");
+              localOption.value = "__local__";
+              localOption.textContent = "Local";
+              sessionSelect.appendChild(localOption);
+
+              exportSelect.innerHTML = "";
+              storageTargets.forEach(target => {{
+                const sessionOption = document.createElement("option");
+                sessionOption.value = target.path;
+                sessionOption.textContent = `${{target.name}} — ${{target.path}}`;
+                sessionSelect.appendChild(sessionOption);
+
+                const exportOption = document.createElement("option");
+                exportOption.value = target.path;
+                exportOption.textContent = `${{target.name}} — ${{target.path}}`;
+                exportSelect.appendChild(exportOption);
+              }});
+
+              const current = payload.current || {{ mode: "local", label: "Local", path: "" }};
+              const currentValue = current.mode === "local" ? "__local__" : current.path;
+              sessionSelect.value = optionExists(sessionSelect, previousSession) ? previousSession : currentValue;
+              if (optionExists(exportSelect, previousExport)) {{
+                exportSelect.value = previousExport;
+              }} else if (exportSelect.options.length > 0) {{
+                exportSelect.selectedIndex = 0;
+              }}
+
+              if (currentEl) currentEl.textContent = `${{current.label}} (${{current.resolved_path || current.path}})`;
+              if (exportSelect.options.length === 0) {{
+                setStorageStatus("export-status", "No mounted USB targets found under /media/golab.", false);
+              }}
+            }}
+
+            async function loadStorageTargets() {{
+              try {{
+                const r = await fetch("/storage/targets");
+                const j = await r.json();
+                populateStorageTargets(j);
+                setStorageStatus("session-target-status", "Drive list refreshed.");
+              }} catch (e) {{
+                setStorageStatus("session-target-status", "Could not refresh drive list.", false);
+              }}
+            }}
+
+            async function setSessionTarget() {{
+              const selectEl = document.getElementById("session-target-select");
+              if (!selectEl) return;
+              const payload = selectEl.value === "__local__"
+                ? {{ mode: "local" }}
+                : {{ mode: "usb", path: selectEl.value }};
+
+              try {{
+                const r = await fetch("/storage/session-target", {{
+                  method: "POST",
+                  headers: {{ "Content-Type": "application/json" }},
+                  body: JSON.stringify(payload),
+                }});
+                const j = await r.json();
+                if (!r.ok || !j.ok) {{
+                  setStorageStatus("session-target-status", j.error || `Target update failed (HTTP ${{r.status}})`, false);
+                  return;
+                }}
+                const currentEl = document.getElementById("session-target-current");
+                if (currentEl) currentEl.textContent = `${{j.current.label}} (${{j.current.resolved_path || j.current.path}})`;
+                setStorageStatus("session-target-status", `Session target set to ${{j.current.label}}.`);
+              }} catch (e) {{
+                setStorageStatus("session-target-status", "Session target update failed.", false);
+              }}
+            }}
+
+            async function exportDailyAverages() {{
+              const selectEl = document.getElementById("export-target-select");
+              if (!selectEl || !selectEl.value) {{
+                setStorageStatus("export-status", "Choose a mounted USB target first.", false);
+                return;
+              }}
+
+              try {{
+                const r = await fetch("/export/env-daily", {{
+                  method: "POST",
+                  headers: {{ "Content-Type": "application/json" }},
+                  body: JSON.stringify({{ path: selectEl.value }}),
+                }});
+                const j = await r.json();
+                if (!r.ok || !j.ok) {{
+                  setStorageStatus("export-status", j.error || `Export failed (HTTP ${{r.status}})`, false);
+                  return;
+                }}
+                setStorageStatus("export-status", `Exported to ${{j.destination}}.`);
+              }} catch (e) {{
+                setStorageStatus("export-status", "Daily averages export failed.", false);
+              }}
+            }}
+
             async function pollState() {{
               try {{
                 const r = await fetch("/state");
@@ -972,6 +1200,15 @@ def dashboard():
                   settingsInitialized = true;
                 }}
 
+                const currentTargetEl = document.getElementById("session-target-current");
+                const sessionTarget = j.storage?.session_save;
+                if (currentTargetEl && sessionTarget) {{
+                  currentTargetEl.textContent = `${{sessionTarget.label}} (${{sessionTarget.resolved_path || sessionTarget.path}})`;
+                }}
+                const targetSelect = document.getElementById("session-target-select");
+                const targetButton = document.getElementById("set-session-target-button");
+                if (targetSelect) targetSelect.disabled = !!j.run_active;
+                if (targetButton) targetButton.disabled = !!j.run_active;
 
                 const c = document.getElementById("confirm");
                 const diag = document.getElementById("run-diagnostics");
@@ -1065,6 +1302,7 @@ def dashboard():
             setInterval(pollLatest, 1000);
             setInterval(pollEnv, 1000);
             setInterval(pollState, 2000);
+            loadStorageTargets();
             pollState();
             pollLatest();
 
@@ -1176,8 +1414,17 @@ def start(settings: RunSettings):
             env_reading=env_reading,
         )
 
+    session_dir, session_dir_error = resolve_current_session_dir()
+    if session_dir_error:
+        return JSONResponse({
+            "ok": False,
+            "applied_at": applied_at,
+            "requested": settings_dict,
+            "error": session_dir_error,
+        }, status_code=400)
+
     session_id = session_manager.start(metadata=settings_dict)
-    session_path = gt_session_writer.start(applied_at)
+    session_path = gt_session_writer.start(applied_at, sessions_dir=session_dir)
 
     try:
         result = gt.start_session(settings_dict, on_sample=on_sample)
@@ -1284,6 +1531,58 @@ def status():
     finalize_gt_session_from_state(state)
     return JSONResponse(state)
 
+@app.get("/storage/targets")
+def storage_targets():
+    return JSONResponse({
+        "current": get_current_session_target(),
+        "targets": get_storage_targets(),
+    })
+
+@app.post("/storage/session-target")
+def set_storage_session_target(req: SessionTargetRequest):
+    if gt.get_state().get("run_active"):
+        return JSONResponse({
+            "ok": False,
+            "error": "Cannot change session save target while a run is active.",
+        }, status_code=409)
+
+    if req.mode == "local":
+        current = set_session_target_local()
+        return JSONResponse({"ok": True, "current": current})
+
+    if req.mode == "usb":
+        if not req.path:
+            return JSONResponse({"ok": False, "error": "USB target path is required."}, status_code=400)
+        target = get_storage_target(req.path)
+        if target is None:
+            return JSONResponse({"ok": False, "error": "USB target is not mounted or writable."}, status_code=400)
+        current = set_session_target_usb(target)
+        return JSONResponse({"ok": True, "current": current})
+
+    return JSONResponse({"ok": False, "error": "Unknown session target mode."}, status_code=400)
+
+@app.post("/export/env-daily")
+def export_env_daily(req: ExportDailyRequest):
+    target = get_storage_target(req.path)
+    if target is None:
+        return JSONResponse({"ok": False, "error": "USB target is not mounted or writable."}, status_code=400)
+    if not ENV_DAILY_AVERAGES_PATH.exists():
+        return JSONResponse({
+            "ok": False,
+            "error": f"Daily averages file not found: {ENV_DAILY_AVERAGES_PATH}",
+        }, status_code=404)
+
+    export_dir = Path(target["path"]) / "golab-monitor" / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    stamp = utc_now().astimezone().strftime("%Y-%m-%d_%H%M")
+    dest = export_dir / f"env_daily_averages_export_{stamp}.jsonl"
+    shutil.copy2(ENV_DAILY_AVERAGES_PATH, dest)
+    return JSONResponse({
+        "ok": True,
+        "destination": str(dest),
+        "filename": dest.name,
+    })
+
 @app.get("/state")
 def get_state():
     with thresholds_lock:
@@ -1298,6 +1597,9 @@ def get_state():
         "settings": current_settings.dict(),
         "thresholds": t,
         "last_update": time.time(),
+        "storage": {
+            "session_save": get_current_session_target(),
+        },
         "time": {
             "utc": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "valid": status["valid"],
