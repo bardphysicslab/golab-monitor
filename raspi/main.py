@@ -413,6 +413,10 @@ class SessionManager:
             self._session["end_time"] = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
             self._session["summary"] = {"error": reason}
 
+    def status(self) -> str:
+        with self.lock:
+            return str(self._session.get("status", "idle"))
+
     def get_data(self) -> List[SessionDataPoint]:
         with self.lock:
             return list(self._session["data"])
@@ -429,6 +433,29 @@ class SessionManager:
 
 
 session_manager = SessionManager()
+
+GT_ERROR_END_REASONS = {"stopped_early", "timeout", "serial_fault"}
+
+def finalize_gt_session_from_state(state: Dict[str, Any]) -> None:
+    if state.get("run_active"):
+        return
+
+    reason = state.get("run_end_reason")
+    if reason not in {"completed", "manual_stop", *GT_ERROR_END_REASONS}:
+        return
+
+    if session_manager.status() != "running":
+        gt_session_writer.stop()
+        return
+
+    gt_session_writer.stop()
+    if reason == "completed":
+        session_manager.complete()
+    elif reason in GT_ERROR_END_REASONS:
+        session_manager.error(reason)
+    elif reason == "manual_stop":
+        session_manager.error("manual_stop")
+    log.info("GT: backend session finalized — reason=%s", reason)
 
 # =========================
 # GT-521S DRIVER
@@ -577,6 +604,7 @@ def dashboard():
               </p>
 
               <div id="confirm" class="small muted">No action yet.</div>
+              <div id="run-diagnostics" class="small muted" style="margin-top:6px;"></div>
             </div>
 
             <div>
@@ -946,19 +974,47 @@ def dashboard():
 
 
                 const c = document.getElementById("confirm");
+                const diag = document.getElementById("run-diagnostics");
+                const received = j.received_samples ?? 0;
+                const target = j.target_samples ?? 0;
+                const reason = j.run_end_reason;
                 if (j.run_active) {{
                   c.className = "small ok";
-                  c.textContent = `Running — ${{j.received_samples}} / ${{j.target_samples}} samples`;
+                  c.textContent = `Running — ${{received}} / ${{target}} samples`;
                   if (!wasRunning) {{
                     sessionStartTime = null;
                     startGraphPolling();
                   }}
                 }} else {{
-                  if (wasRunning) {{
-                    c.className = "small muted";
+                  if (reason === "completed") {{
+                    c.className = "small ok";
                     c.textContent = "Run complete.";
+                  }} else if (reason === "stopped_early") {{
+                    c.className = "small bad";
+                    c.textContent = `Stopped early — ${{received}} / ${{target}} samples received`;
+                  }} else if (reason === "serial_fault") {{
+                    c.className = "small bad";
+                    c.textContent = `Run fault — ${{received}} / ${{target}} samples received`;
+                  }} else if (reason === "timeout") {{
+                    c.className = "small bad";
+                    c.textContent = `Run timeout — ${{received}} / ${{target}} samples received`;
+                  }} else if (reason === "manual_stop") {{
+                    c.className = "small muted";
+                    c.textContent = "Stopped.";
+                  }}
+                  if (wasRunning) {{
                     stopGraphPolling();
                   }}
+                }}
+
+                if (diag) {{
+                  const bits = [];
+                  if (j.last_gt_sample_timestamp) bits.push(`Last GT ts: ${{j.last_gt_sample_timestamp}}`);
+                  if (j.last_op_status) bits.push(`OP: ${{j.last_op_status}}`);
+                  if ((j.suspected_missed_samples ?? 0) > 0) {{
+                    bits.push(`Suspected missed: ${{j.suspected_missed_samples}}`);
+                  }}
+                  diag.textContent = bits.join(" · ");
                 }}
 
                 wasRunning = j.run_active;
@@ -1120,10 +1176,11 @@ def start(settings: RunSettings):
             env_reading=env_reading,
         )
 
+    session_id = session_manager.start(metadata=settings_dict)
+    session_path = gt_session_writer.start(applied_at)
+
     try:
         result = gt.start_session(settings_dict, on_sample=on_sample)
-        session_id = session_manager.start(metadata=settings_dict)
-        session_path = gt_session_writer.start(applied_at)
         log.info("GT: session started — id=%s", session_id)
         log.info("GT: local session file — %s", session_path)
         return JSONResponse({
@@ -1153,10 +1210,20 @@ def start(settings: RunSettings):
 def stop():
     at = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
     result = gt.stop()
-    gt_session_writer.stop()
-    session_manager.complete()
+    state = gt.get_state()
+    finalize_gt_session_from_state(state)
+    if not result.get("stopped", False) and state.get("run_end_reason") == "manual_stop":
+        session_manager.error("stop_failed")
+    if session_manager.status() == "running":
+        reason = state.get("run_end_reason") or ("manual_stop" if result.get("stopped") else "stop_failed")
+        gt_session_writer.stop()
+        session_manager.error(reason)
     log.info("GT: session stopped — stopped=%s op=%s", result.get("stopped"), result.get("op_status"))
-    return JSONResponse({"ok": result.get("stopped", False), "at": at})
+    return JSONResponse({
+        "ok": result.get("stopped", False),
+        "at": at,
+        "run_end_reason": state.get("run_end_reason"),
+    })
 
 @app.get("/gt/latest")
 def get_latest():
@@ -1213,7 +1280,9 @@ def get_presets():
 
 @app.get("/gt/status")
 def status():
-    return JSONResponse(gt.get_state())
+    state = gt.get_state()
+    finalize_gt_session_from_state(state)
+    return JSONResponse(state)
 
 @app.get("/state")
 def get_state():
@@ -1224,6 +1293,7 @@ def get_state():
         }
     status = time_status()
     state = gt.get_state()
+    finalize_gt_session_from_state(state)
     state.update({
         "settings": current_settings.dict(),
         "thresholds": t,

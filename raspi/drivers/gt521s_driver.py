@@ -38,7 +38,7 @@ import serial
 
 log = logging.getLogger(__name__)
 
-DEFAULT_UID = "bb-0001"
+DEFAULT_UID = "bb-0002"
 DEFAULT_PORT = (
     "/dev/serial/by-id/"
     "usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_Y10162-if00-port0"
@@ -70,6 +70,7 @@ class GT521SDriver:
 
         self.ser: Optional[serial.Serial] = None
         self.lock = threading.Lock()
+        self.state_lock = threading.Lock()
 
         self.reader_thread: Optional[threading.Thread] = None
         self.reader_stop = threading.Event()
@@ -78,6 +79,18 @@ class GT521SDriver:
         self.run_active = False
         self.target_samples = 0
         self.received_samples = 0
+        self.run_started_at_local: Optional[float] = None
+        self.expected_sample_interval_s: Optional[float] = None
+        self.watchdog_timeout_s: Optional[float] = None
+        self.last_sample_received_at_local: Optional[float] = None
+        self.last_gt_sample_timestamp: Optional[str] = None
+        self.last_op_status: Optional[str] = None
+        self.run_end_reason: Optional[str] = None
+        self.suspected_missed_samples = 0
+        self.consecutive_watchdog_misses = 0
+        self.watchdog_thread: Optional[threading.Thread] = None
+        self.watchdog_stop = threading.Event()
+        self._last_gt_sample_epoch: Optional[float] = None
 
         self._latest: Optional[Dict[str, Any]] = None
         self._latest_lock = threading.Lock()
@@ -147,12 +160,22 @@ class GT521SDriver:
 
     def get_state(self) -> Dict[str, Any]:
         """Return current run state."""
-        return {
-            "run_active": self.run_active,
-            "received_samples": self.received_samples,
-            "target_samples": self.target_samples,
-            "reader_running": self.reader_running,
-        }
+        with self.state_lock:
+            return {
+                "run_active": self.run_active,
+                "received_samples": self.received_samples,
+                "target_samples": self.target_samples,
+                "reader_running": self.reader_running,
+                "run_started_at_local": self.run_started_at_local,
+                "expected_sample_interval_s": self.expected_sample_interval_s,
+                "watchdog_timeout_s": self.watchdog_timeout_s,
+                "last_sample_received_at_local": self.last_sample_received_at_local,
+                "last_gt_sample_timestamp": self.last_gt_sample_timestamp,
+                "last_op_status": self.last_op_status,
+                "run_end_reason": self.run_end_reason,
+                "suspected_missed_samples": self.suspected_missed_samples,
+                "consecutive_watchdog_misses": self.consecutive_watchdog_misses,
+            }
 
     # ------------------------------------------------------------------
     # High-level session API
@@ -197,11 +220,10 @@ class GT521SDriver:
         if op == "S":
             raise RuntimeError(f"GT did not start: OP returned '{op}' (Stopped)")
 
-        self.target_samples = settings.get("samples", 0)
-        self.received_samples = 0
-        self.run_active = True
+        self._initialize_run_tracking(settings, op)
         log.info("GT: starting reader thread")
         self._ensure_reader()
+        self._ensure_watchdog()
 
         return {
             "ok": True,
@@ -216,10 +238,13 @@ class GT521SDriver:
 
         Returns dict with stopped, op_status.
         """
-        self.run_active = False
-        self.target_samples = 0
-        self.received_samples = 0
+        with self.state_lock:
+            already_ended = not self.run_active and self.run_end_reason is not None
+        if not already_ended:
+            self._finalize_run("manual_stop", force=True)
 
+        log.info("GT: stopping watchdog thread")
+        self._stop_watchdog_wait()
         log.info("GT: stopping reader thread")
         self._stop_reader_wait()
 
@@ -233,6 +258,8 @@ class GT521SDriver:
         op = "?"
         for _ in range(6):
             op = self._check_op_status()
+            with self.state_lock:
+                self.last_op_status = op
             log.info("GT: OP status after stop: %s", op)
             if op in ("S", "STOP"):
                 stopped = True
@@ -259,6 +286,199 @@ class GT521SDriver:
         """Query OP and return the raw response string."""
         ok, raw = self._cmd_op()
         return raw.decode(errors="replace")
+
+    # ------------------------------------------------------------------
+    # Run tracking
+    # ------------------------------------------------------------------
+
+    def _initialize_run_tracking(self, settings: Dict[str, Any], op_status: str) -> None:
+        sample_time_s = float(settings.get("sample_time_s", 10) or 0)
+        hold_time_s = float(settings.get("hold_time_s", 50) or 0)
+        expected_interval = max(1.0, sample_time_s + hold_time_s)
+        grace = max(15.0, min(60.0, expected_interval * 0.5))
+        watchdog_timeout = expected_interval + grace
+
+        with self.state_lock:
+            self.target_samples = int(settings.get("samples", 0) or 0)
+            self.received_samples = 0
+            self.run_active = True
+            self.run_started_at_local = time.time()
+            self.expected_sample_interval_s = expected_interval
+            self.watchdog_timeout_s = watchdog_timeout
+            self.last_sample_received_at_local = None
+            self.last_gt_sample_timestamp = None
+            self.last_op_status = op_status
+            self.run_end_reason = None
+            self.suspected_missed_samples = 0
+            self.consecutive_watchdog_misses = 0
+            self._last_gt_sample_epoch = None
+
+        self.watchdog_stop.clear()
+        log.info(
+            "GT: run tracking initialized — target=%s interval=%.1fs watchdog=%.1fs op=%s",
+            self.target_samples,
+            expected_interval,
+            watchdog_timeout,
+            op_status,
+        )
+
+    def _finalize_run(self, reason: str, force: bool = False) -> None:
+        with self.state_lock:
+            if not force and self.run_end_reason is not None and self.run_end_reason != reason:
+                return
+            self.run_active = False
+            self.run_end_reason = reason
+            target_samples = self.target_samples
+            received_samples = self.received_samples
+            suspected_missed = self.suspected_missed_samples
+
+        self.watchdog_stop.set()
+        log.info(
+            "GT: final run summary — target=%s received=%s suspected_missed=%s reason=%s",
+            target_samples,
+            received_samples,
+            suspected_missed,
+            reason,
+        )
+
+    @staticmethod
+    def _parse_gt_sample_timestamp(value: Optional[str]) -> Optional[float]:
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").timestamp()
+        except Exception:
+            return None
+
+    def _record_sample_tracking(self, parsed: Dict[str, Any]) -> int:
+        now = time.time()
+        device_ts = parsed.get("_device_ts")
+        device_epoch = self._parse_gt_sample_timestamp(device_ts)
+
+        with self.state_lock:
+            previous_epoch = self._last_gt_sample_epoch
+            expected_interval = self.expected_sample_interval_s
+
+            if (
+                previous_epoch is not None
+                and device_epoch is not None
+                and expected_interval
+                and expected_interval > 0
+            ):
+                actual_gap = device_epoch - previous_epoch
+                if actual_gap >= expected_interval * 1.5:
+                    estimated_missing = round(actual_gap / expected_interval) - 1
+                    if estimated_missing > 0:
+                        self.suspected_missed_samples += estimated_missing
+                        log.warning(
+                            "GT: suspected missed sample(s) — gap=%.1fs expected=%.1fs estimated_missing=%d prev_ts=%s current_ts=%s",
+                            actual_gap,
+                            expected_interval,
+                            estimated_missing,
+                            self.last_gt_sample_timestamp,
+                            device_ts,
+                        )
+
+            self.received_samples += 1
+            self.last_sample_received_at_local = now
+            self.last_gt_sample_timestamp = device_ts
+            if device_epoch is not None:
+                self._last_gt_sample_epoch = device_epoch
+            self.consecutive_watchdog_misses = 0
+            sample_number = self.received_samples
+            target_samples = self.target_samples
+            should_complete = (
+                self.run_active
+                and target_samples > 0
+                and sample_number >= target_samples
+            )
+
+        log.info(
+            "GT: parsed sample #%d — c03=%s c50=%s gt_ts=%s",
+            sample_number,
+            parsed.get("c03"),
+            parsed.get("c50"),
+            device_ts,
+        )
+
+        if should_complete:
+            log.info("GT: target samples reached (%d)", target_samples)
+            self._finalize_run("completed")
+            self._stop_reader()
+
+        return sample_number
+
+    def _watchdog_loop(self) -> None:
+        log.info("GT: watchdog thread started")
+        try:
+            while not self.watchdog_stop.is_set():
+                with self.state_lock:
+                    run_active = self.run_active
+                    last_sample_at = self.last_sample_received_at_local
+                    run_started_at = self.run_started_at_local
+                    timeout_s = self.watchdog_timeout_s or 60.0
+                    received = self.received_samples
+                    target = self.target_samples
+
+                if not run_active:
+                    return
+
+                reference_time = last_sample_at or run_started_at or time.time()
+                elapsed = time.time() - reference_time
+                if elapsed <= timeout_s:
+                    self.watchdog_stop.wait(min(5.0, max(1.0, timeout_s - elapsed)))
+                    continue
+
+                log.warning(
+                    "GT: watchdog timeout event — elapsed=%.1fs timeout=%.1fs received=%s target=%s",
+                    elapsed,
+                    timeout_s,
+                    received,
+                    target,
+                )
+
+                try:
+                    op = self._check_op_status()
+                    serial_failed = False
+                except Exception:
+                    log.exception("GT: watchdog OP check failed")
+                    op = "?"
+                    serial_failed = True
+
+                with self.state_lock:
+                    self.last_op_status = op
+                log.info("GT: watchdog OP result — %s", op)
+
+                if op == "S":
+                    with self.state_lock:
+                        reason = "completed" if self.received_samples >= self.target_samples else "stopped_early"
+                    self._finalize_run(reason)
+                    self._stop_reader()
+                    return
+
+                if op in ("R", "H"):
+                    with self.state_lock:
+                        self.consecutive_watchdog_misses += 1
+                        misses = self.consecutive_watchdog_misses
+                    log.warning("GT: watchdog miss while OP=%s — consecutive=%d", op, misses)
+                    if misses >= 3:
+                        self._finalize_run("serial_fault")
+                        self._stop_reader()
+                        return
+                    self.watchdog_stop.wait(min(10.0, max(1.0, timeout_s / 3.0)))
+                    continue
+
+                with self.state_lock:
+                    self.consecutive_watchdog_misses += 1
+                    misses = self.consecutive_watchdog_misses
+                log.warning("GT: watchdog could not confirm OP status — consecutive=%d", misses)
+                if misses >= 3:
+                    self._finalize_run("serial_fault" if serial_failed else "timeout")
+                    self._stop_reader()
+                    return
+                self.watchdog_stop.wait(min(10.0, max(1.0, timeout_s / 3.0)))
+        finally:
+            log.info("GT: watchdog thread stopped")
 
     # ------------------------------------------------------------------
     # Serial port
@@ -534,14 +754,7 @@ class GT521SDriver:
                         s = line.decode(errors="replace").strip()
                         parsed = self._parse_line(s)
                         if parsed:
-                            log.debug(
-                                "GT: sample #%d — c03=%s c50=%s ts=%s",
-                                self.received_samples + 1,
-                                parsed.get("c03"),
-                                parsed.get("c50"),
-                                parsed.get("_device_ts"),
-                            )
-                            self.received_samples += 1
+                            self._record_sample_tracking(parsed)
                             with self._latest_lock:
                                 self._latest = parsed
                             if self._on_sample is not None:
@@ -552,17 +765,6 @@ class GT521SDriver:
                                     })
                                 except Exception:
                                     log.exception("GT: on_sample callback raised")
-                            if (
-                                self.run_active
-                                and self.target_samples > 0
-                                and self.received_samples >= self.target_samples
-                            ):
-                                log.info(
-                                    "GT: target samples reached (%d), stopping reader",
-                                    self.target_samples,
-                                )
-                                self.run_active = False
-                                self._stop_reader()
                 else:
                     time.sleep(0.05)
         finally:
@@ -581,6 +783,18 @@ class GT521SDriver:
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()
 
+    def _ensure_watchdog(self) -> None:
+        if self.watchdog_thread and self.watchdog_thread.is_alive() and not self.watchdog_stop.is_set():
+            return
+        if self.watchdog_thread and self.watchdog_thread.is_alive() and self.watchdog_stop.is_set():
+            self.watchdog_thread.join(timeout=1.0)
+            if self.watchdog_thread.is_alive():
+                log.warning("GT: previous watchdog thread did not stop; not starting a new one")
+                return
+        self.watchdog_stop.clear()
+        self.watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
+        self.watchdog_thread.start()
+
     def _stop_reader(self) -> None:
         self.reader_stop.set()
 
@@ -590,3 +804,14 @@ class GT521SDriver:
             self.reader_thread.join(timeout=1.0)
             if self.reader_thread.is_alive():
                 log.warning("GT: reader thread did not stop within 1 s")
+
+    def _stop_watchdog_wait(self) -> None:
+        self.watchdog_stop.set()
+        if (
+            self.watchdog_thread
+            and self.watchdog_thread.is_alive()
+            and threading.current_thread() is not self.watchdog_thread
+        ):
+            self.watchdog_thread.join(timeout=1.0)
+            if self.watchdog_thread.is_alive():
+                log.warning("GT: watchdog thread did not stop within 1 s")
