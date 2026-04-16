@@ -648,6 +648,7 @@ def dashboard():
             let chartC50 = null;
             let pollInterval = null;
             let wasRunning = false;
+            let settingsInitialized = false;
 
             const FT3_TO_M3 = {FT3_TO_M3};
             const PMS_0P1L_TO_M3 = {PMS_0P1L_TO_M3};
@@ -964,12 +965,11 @@ def dashboard():
                 const r = await fetch("/state");
                 const j = await r.json();
 
-                const editingIds = ["sample_time_s","hold_time_s","samples"];
-                const userEditing = editingIds.includes(document.activeElement?.id);
-                if (!userEditing) {{
+                if (!settingsInitialized) {{
                   document.getElementById("sample_time_s").value = j.settings.sample_time_s;
                   document.getElementById("hold_time_s").value = j.settings.hold_time_s;
                   document.getElementById("samples").value = j.settings.samples;
+                  settingsInitialized = true;
                 }}
 
 
