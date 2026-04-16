@@ -730,28 +730,29 @@ def dashboard():
 
         <div class="card" style="margin-top: 20px;">
           <h3>Data & Export</h3>
+          <div class="small muted" style="margin-bottom:12px;">Current Session Target: <span id="session-target-current">Local</span></div>
           <div class="controls-row" style="margin-bottom:0;">
             <div>
-              <h4 style="margin-top:0;">Session Save Target</h4>
-              <div class="small muted" style="margin-bottom:8px;">Current: <span id="session-target-current">Local</span></div>
-              <select id="session-target-select" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;"></select>
-              <p>
-                <button id="set-session-target-button" onclick="setSessionTarget()">Set Session Target</button>
-                <button onclick="loadStorageTargets()">Refresh Drives</button>
-              </p>
-              <div id="session-target-status" class="small muted"></div>
+              <label style="margin-top:0;">Session Save Mode</label>
+              <select id="session-save-mode" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;">
+                <option value="local">Local</option>
+                <option value="usb">USB</option>
+              </select>
             </div>
             <div>
-              <h4 style="margin-top:0;">Export Daily Averages</h4>
-              <div class="small muted" style="margin-bottom:8px;">Copies the local daily averages file to USB.</div>
-              <select id="export-target-select" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;"></select>
-              <p>
-                <button onclick="exportDailyAverages()">Export Daily Averages</button>
+              <label style="margin-top:0;">USB Target</label>
+              <select id="usb-target-select" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;"></select>
+            </div>
+            <div>
+              <p style="margin-top:28px;">
+                <button id="set-session-target-button" onclick="setSessionTarget()">Set Session Target</button>
+                <button id="export-daily-button" onclick="exportDailyAverages()">Export Daily Averages</button>
                 <button onclick="loadStorageTargets()">Refresh Drives</button>
               </p>
-              <div id="export-status" class="small muted"></div>
             </div>
           </div>
+          <div id="session-target-status" class="small muted"></div>
+          <div id="export-status" class="small muted" style="margin-top:6px;"></div>
         </div>
 
         <script>
@@ -1085,44 +1086,36 @@ def dashboard():
 
             function populateStorageTargets(payload) {{
               storageTargets = payload.targets || [];
-              const sessionSelect = document.getElementById("session-target-select");
-              const exportSelect = document.getElementById("export-target-select");
+              const modeSelect = document.getElementById("session-save-mode");
+              const usbSelect = document.getElementById("usb-target-select");
               const currentEl = document.getElementById("session-target-current");
-              if (!sessionSelect || !exportSelect) return;
+              if (!modeSelect || !usbSelect) return;
 
-              const previousSession = sessionSelect.value;
-              const previousExport = exportSelect.value;
+              const previousUsb = usbSelect.value;
 
-              sessionSelect.innerHTML = "";
-              const localOption = document.createElement("option");
-              localOption.value = "__local__";
-              localOption.textContent = "Local";
-              sessionSelect.appendChild(localOption);
-
-              exportSelect.innerHTML = "";
+              usbSelect.innerHTML = "";
               storageTargets.forEach(target => {{
-                const sessionOption = document.createElement("option");
-                sessionOption.value = target.path;
-                sessionOption.textContent = `${{target.name}} — ${{target.path}}`;
-                sessionSelect.appendChild(sessionOption);
-
-                const exportOption = document.createElement("option");
-                exportOption.value = target.path;
-                exportOption.textContent = `${{target.name}} — ${{target.path}}`;
-                exportSelect.appendChild(exportOption);
+                const option = document.createElement("option");
+                option.value = target.path;
+                option.textContent = `${{target.name}} — ${{target.path}}`;
+                usbSelect.appendChild(option);
               }});
 
               const current = payload.current || {{ mode: "local", label: "Local", path: "" }};
-              const currentValue = current.mode === "local" ? "__local__" : current.path;
-              sessionSelect.value = optionExists(sessionSelect, previousSession) ? previousSession : currentValue;
-              if (optionExists(exportSelect, previousExport)) {{
-                exportSelect.value = previousExport;
-              }} else if (exportSelect.options.length > 0) {{
-                exportSelect.selectedIndex = 0;
+              modeSelect.value = current.mode === "usb" ? "usb" : "local";
+              if (optionExists(usbSelect, previousUsb)) {{
+                usbSelect.value = previousUsb;
+              }} else if (current.mode === "usb" && optionExists(usbSelect, current.path)) {{
+                usbSelect.value = current.path;
+              }} else if (usbSelect.options.length > 0) {{
+                usbSelect.selectedIndex = 0;
               }}
 
               if (currentEl) currentEl.textContent = `${{current.label}} (${{current.resolved_path || current.path}})`;
-              if (exportSelect.options.length === 0) {{
+              usbSelect.disabled = usbSelect.options.length === 0;
+              const exportButton = document.getElementById("export-daily-button");
+              if (exportButton) exportButton.disabled = usbSelect.options.length === 0;
+              if (usbSelect.options.length === 0) {{
                 setStorageStatus("export-status", "No mounted USB targets found under /media/golab.", false);
               }}
             }}
@@ -1139,11 +1132,17 @@ def dashboard():
             }}
 
             async function setSessionTarget() {{
-              const selectEl = document.getElementById("session-target-select");
-              if (!selectEl) return;
-              const payload = selectEl.value === "__local__"
-                ? {{ mode: "local" }}
-                : {{ mode: "usb", path: selectEl.value }};
+              const modeEl = document.getElementById("session-save-mode");
+              const usbEl = document.getElementById("usb-target-select");
+              if (!modeEl || !usbEl) return;
+              let payload = {{ mode: "local" }};
+              if (modeEl.value === "usb") {{
+                if (!usbEl.value) {{
+                  setStorageStatus("session-target-status", "Choose a mounted USB target first.", false);
+                  return;
+                }}
+                payload = {{ mode: "usb", path: usbEl.value }};
+              }}
 
               try {{
                 const r = await fetch("/storage/session-target", {{
@@ -1165,7 +1164,7 @@ def dashboard():
             }}
 
             async function exportDailyAverages() {{
-              const selectEl = document.getElementById("export-target-select");
+              const selectEl = document.getElementById("usb-target-select");
               if (!selectEl || !selectEl.value) {{
                 setStorageStatus("export-status", "Choose a mounted USB target first.", false);
                 return;
@@ -1205,9 +1204,12 @@ def dashboard():
                 if (currentTargetEl && sessionTarget) {{
                   currentTargetEl.textContent = `${{sessionTarget.label}} (${{sessionTarget.resolved_path || sessionTarget.path}})`;
                 }}
-                const targetSelect = document.getElementById("session-target-select");
+                const modeSelect = document.getElementById("session-save-mode");
                 const targetButton = document.getElementById("set-session-target-button");
-                if (targetSelect) targetSelect.disabled = !!j.run_active;
+                if (modeSelect) {{
+                  modeSelect.value = sessionTarget?.mode === "usb" ? "usb" : "local";
+                  modeSelect.disabled = !!j.run_active;
+                }}
                 if (targetButton) targetButton.disabled = !!j.run_active;
 
                 const c = document.getElementById("confirm");
