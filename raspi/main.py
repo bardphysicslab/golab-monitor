@@ -137,6 +137,16 @@ def time_status(force_refresh: bool = False) -> dict:
 def system_time_valid() -> bool:
     return time_status()["valid"]
 
+def time_metadata(status: Optional[Dict[str, Any]] = None, utc: Optional[str] = None) -> Dict[str, Any]:
+    if status is None:
+        status = time_status()
+    return {
+        "utc": utc or utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": status["source"],
+        "ntp_synced": status["ntp_synced"],
+        "sane": status["sane"],
+    }
+
 def ensure_data_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     GT_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -319,6 +329,7 @@ class GTSessionWriter:
     def append_sample(
         self,
         session_ts_utc: str,
+        time_info: Dict[str, Any],
         gt_reading: Optional[Dict[str, Any]],
         env_reading: Optional[Dict[str, Any]],
     ) -> None:
@@ -329,6 +340,7 @@ class GTSessionWriter:
 
         append_jsonl(path, {
             "session_ts_utc": session_ts_utc,
+            "time": time_info,
             "devices": {
                 "gt521": gt_reading,
                 "env1": env_reading,
@@ -519,7 +531,7 @@ class SessionManager:
 
 session_manager = SessionManager()
 
-GT_ERROR_END_REASONS = {"stopped_early", "timeout", "serial_fault"}
+GT_ERROR_END_REASONS = {"stopped_early", "timeout", "serial_fault", "time_invalid"}
 
 def finalize_gt_session_from_state(state: Dict[str, Any]) -> None:
     if state.get("run_active"):
@@ -542,6 +554,23 @@ def finalize_gt_session_from_state(state: Dict[str, Any]) -> None:
         session_manager.error("manual_stop")
     log.info("GT: backend session finalized — reason=%s", reason)
 
+gt_monitor_stop = threading.Event()
+
+def monitor_gt_session_state() -> None:
+    while not gt_monitor_stop.is_set():
+        try:
+            state = gt.get_state()
+            if state.get("run_active"):
+                status = time_status(force_refresh=True)
+                if not status["valid"]:
+                    log.error("GT: aborting active run because system time became invalid")
+                    gt.abort_run("time_invalid")
+                    state = gt.get_state()
+            finalize_gt_session_from_state(state)
+        except Exception:
+            log.exception("GT: session monitor failed")
+        gt_monitor_stop.wait(1.0)
+
 # =========================
 # GT-521S DRIVER
 # =========================
@@ -560,6 +589,9 @@ try:
     log.info("ENV: connected")
 except Exception:
     log.exception("ENV: failed to connect")
+
+gt_monitor_thread = threading.Thread(target=monitor_gt_session_state, daemon=True)
+gt_monitor_thread.start()
 
 # =========================
 # DASHBOARD UI
@@ -1371,6 +1403,14 @@ def start(settings: RunSettings):
 
     def on_sample(parsed: Dict[str, Any]) -> None:
         session_ts_utc = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        sample_time_status = time_status(force_refresh=True)
+        if not sample_time_status["valid"]:
+            log.error("GT: dropping sample and finalizing session because system time is invalid")
+            gt_session_writer.stop()
+            if session_manager.status() == "running":
+                session_manager.error("time_invalid")
+            return
+
         c03_m3 = round(parsed.get("c03", 0) * FT3_TO_M3)
         c50_m3 = round(parsed.get("c50", 0) * FT3_TO_M3)
         with thresholds_lock:
@@ -1394,6 +1434,7 @@ def start(settings: RunSettings):
 
         gt_session_writer.append_sample(
             session_ts_utc=session_ts_utc,
+            time_info=time_metadata(sample_time_status, utc=session_ts_utc),
             gt_reading=gt.get_reading(),
             env_reading=env_reading,
         )

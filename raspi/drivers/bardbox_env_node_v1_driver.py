@@ -143,7 +143,6 @@ class BardboxEnvNodeV1Driver:
         with self._lock:
             latest = self._latest
             latest_time = self._latest_time
-            latest_raw = self._latest_raw
 
         if latest is None:
             return {
@@ -174,7 +173,7 @@ class BardboxEnvNodeV1Driver:
             "status": status,
             "data": data,
             "extended": extended,
-            "raw": latest_raw,
+            "raw": None,
         }
 
     def stop(self) -> None:

@@ -155,7 +155,7 @@ class GT521SDriver:
                 "extended": {
                     "device_ts": self._latest.get("_device_ts"),
                 },
-                "raw": self._latest.get("_raw_line"),
+                "raw": None,
             }
 
     def get_state(self) -> Dict[str, Any]:
@@ -267,6 +267,39 @@ class GT521SDriver:
             time.sleep(0.3)
 
         return {"stopped": stopped, "op_status": op}
+
+    def abort_run(self, reason: str) -> Dict[str, Any]:
+        """
+        Abort an active run for an application-level fault such as invalid time.
+
+        This is intentionally not session management: the application owns
+        session metadata and storage finalization. The driver only stops the
+        hardware stream and records the terminal run reason.
+        """
+        self._finalize_run(reason, force=True)
+        log.info("GT: aborting run — reason=%s", reason)
+        self._stop_watchdog_wait()
+        self._stop_reader_wait()
+
+        stopped = False
+        op = "?"
+        try:
+            self._open()
+            self._cmd_stop()
+            time.sleep(0.15)
+            for _ in range(6):
+                op = self._check_op_status()
+                with self.state_lock:
+                    self.last_op_status = op
+                log.info("GT: OP status after abort: %s", op)
+                if op in ("S", "STOP"):
+                    stopped = True
+                    break
+                time.sleep(0.3)
+        except Exception:
+            log.exception("GT: abort_run failed while stopping hardware")
+
+        return {"stopped": stopped, "op_status": op, "run_end_reason": reason}
 
     # ------------------------------------------------------------------
     # Escape hatch
@@ -800,7 +833,11 @@ class GT521SDriver:
 
     def _stop_reader_wait(self) -> None:
         self.reader_stop.set()
-        if self.reader_thread and self.reader_thread.is_alive():
+        if (
+            self.reader_thread
+            and self.reader_thread.is_alive()
+            and threading.current_thread() is not self.reader_thread
+        ):
             self.reader_thread.join(timeout=1.0)
             if self.reader_thread.is_alive():
                 log.warning("GT: reader thread did not stop within 1 s")
