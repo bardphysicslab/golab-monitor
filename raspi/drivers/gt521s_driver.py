@@ -357,7 +357,23 @@ class GT521SDriver:
 
     def _finalize_run(self, reason: str, force: bool = False) -> None:
         with self.state_lock:
+            log.info(
+                "GT_DEBUG: finalize requested — reason=%s force=%s run_active=%s prior_reason=%s received=%s target=%s",
+                reason,
+                force,
+                self.run_active,
+                self.run_end_reason,
+                self.received_samples,
+                self.target_samples,
+            )
             if not force and self.run_end_reason is not None and self.run_end_reason != reason:
+                log.info(
+                    "GT_DEBUG: finalize ignored — requested_reason=%s existing_reason=%s received=%s target=%s",
+                    reason,
+                    self.run_end_reason,
+                    self.received_samples,
+                    self.target_samples,
+                )
                 return
             self.run_active = False
             self.run_end_reason = reason
@@ -425,6 +441,13 @@ class GT521SDriver:
                 and target_samples > 0
                 and sample_number >= target_samples
             )
+            log.info(
+                "GT_DEBUG: received_samples incremented — sample_number=%s target=%s should_complete=%s gt_ts=%s",
+                sample_number,
+                target_samples,
+                should_complete,
+                device_ts,
+            )
 
         log.info(
             "GT: parsed sample #%d — c03=%s c50=%s gt_ts=%s",
@@ -485,6 +508,12 @@ class GT521SDriver:
                 if op == "S":
                     with self.state_lock:
                         reason = "completed" if self.received_samples >= self.target_samples else "stopped_early"
+                        log.info(
+                            "GT_DEBUG: watchdog OP:S finalize decision — reason=%s received=%s target=%s",
+                            reason,
+                            self.received_samples,
+                            self.target_samples,
+                        )
                     self._finalize_run(reason)
                     self._stop_reader()
                     return
@@ -705,6 +734,7 @@ class GT521SDriver:
         """
         _, raw = self._cmd_op()
         text = raw.decode(errors="replace")
+        log.info("GT_DEBUG: OP raw response — %r", text)
         if "OP R" in text or "RUNNING" in text.upper():
             return "R"
         if "OP S" in text or "OP STOP" in text or "STOPPED" in text.upper():
@@ -785,8 +815,16 @@ class GT521SDriver:
                     while b"\n" in buf:
                         line, buf = buf.split(b"\n", 1)
                         s = line.decode(errors="replace").strip()
+                        log.info("GT_DEBUG: raw serial line — %r", s)
                         parsed = self._parse_line(s)
                         if parsed:
+                            log.info(
+                                "GT_DEBUG: parsed GT sample line — gt_ts=%s c03=%s c50=%s raw=%r",
+                                parsed.get("_device_ts"),
+                                parsed.get("c03"),
+                                parsed.get("c50"),
+                                parsed.get("_raw_line"),
+                            )
                             self._record_sample_tracking(parsed)
                             with self._latest_lock:
                                 self._latest = parsed
