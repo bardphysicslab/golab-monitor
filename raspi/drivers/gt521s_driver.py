@@ -91,6 +91,7 @@ class GT521SDriver:
         self.watchdog_thread: Optional[threading.Thread] = None
         self.watchdog_stop = threading.Event()
         self._last_gt_sample_epoch: Optional[float] = None
+        self.sample_delivery_active = False
 
         self._latest: Optional[Dict[str, Any]] = None
         self._latest_lock = threading.Lock()
@@ -175,6 +176,7 @@ class GT521SDriver:
                 "run_end_reason": self.run_end_reason,
                 "suspected_missed_samples": self.suspected_missed_samples,
                 "consecutive_watchdog_misses": self.consecutive_watchdog_misses,
+                "sample_delivery_active": self.sample_delivery_active,
             }
 
     # ------------------------------------------------------------------
@@ -345,6 +347,7 @@ class GT521SDriver:
             self.suspected_missed_samples = 0
             self.consecutive_watchdog_misses = 0
             self._last_gt_sample_epoch = None
+            self.sample_delivery_active = False
 
         self.watchdog_stop.clear()
         log.info(
@@ -399,7 +402,7 @@ class GT521SDriver:
         except Exception:
             return None
 
-    def _record_sample_tracking(self, parsed: Dict[str, Any]) -> int:
+    def _record_sample_tracking(self, parsed: Dict[str, Any]) -> tuple[int, bool]:
         now = time.time()
         device_ts = parsed.get("_device_ts")
         device_epoch = self._parse_gt_sample_timestamp(device_ts)
@@ -457,12 +460,31 @@ class GT521SDriver:
             device_ts,
         )
 
+        return sample_number, should_complete
+
+    def _deliver_sample(self, parsed: Dict[str, Any]) -> None:
+        with self.state_lock:
+            self.sample_delivery_active = True
+        sample_number, should_complete = self._record_sample_tracking(parsed)
+        try:
+            with self._latest_lock:
+                self._latest = parsed
+            if self._on_sample is not None:
+                try:
+                    self._on_sample({
+                        "c03": parsed.get("c03"),
+                        "c50": parsed.get("c50"),
+                    })
+                except Exception:
+                    log.exception("GT: on_sample callback raised")
+        finally:
+            with self.state_lock:
+                self.sample_delivery_active = False
+
         if should_complete:
-            log.info("GT: target samples reached (%d)", target_samples)
+            log.info("GT: target samples reached (%d)", sample_number)
             self._finalize_run("completed")
             self._stop_reader()
-
-        return sample_number
 
     def _watchdog_loop(self) -> None:
         log.info("GT: watchdog thread started")
@@ -475,9 +497,14 @@ class GT521SDriver:
                     timeout_s = self.watchdog_timeout_s or 60.0
                     received = self.received_samples
                     target = self.target_samples
+                    sample_delivery_active = self.sample_delivery_active
 
                 if not run_active:
                     return
+
+                if sample_delivery_active:
+                    self.watchdog_stop.wait(0.1)
+                    continue
 
                 reference_time = last_sample_at or run_started_at or time.time()
                 elapsed = time.time() - reference_time
@@ -507,13 +534,19 @@ class GT521SDriver:
 
                 if op == "S":
                     with self.state_lock:
-                        reason = "completed" if self.received_samples >= self.target_samples else "stopped_early"
-                        log.info(
-                            "GT_DEBUG: watchdog OP:S finalize decision — reason=%s received=%s target=%s",
-                            reason,
-                            self.received_samples,
-                            self.target_samples,
-                        )
+                        if self.sample_delivery_active:
+                            reason = None
+                        else:
+                            reason = "completed" if self.received_samples >= self.target_samples else "stopped_early"
+                            log.info(
+                                "GT_DEBUG: watchdog OP:S finalize decision — reason=%s received=%s target=%s",
+                                reason,
+                                self.received_samples,
+                                self.target_samples,
+                            )
+                    if reason is None:
+                        self.watchdog_stop.wait(0.1)
+                        continue
                     self._finalize_run(reason)
                     self._stop_reader()
                     return
@@ -825,17 +858,7 @@ class GT521SDriver:
                                 parsed.get("c50"),
                                 parsed.get("_raw_line"),
                             )
-                            self._record_sample_tracking(parsed)
-                            with self._latest_lock:
-                                self._latest = parsed
-                            if self._on_sample is not None:
-                                try:
-                                    self._on_sample({
-                                        "c03": parsed.get("c03"),
-                                        "c50": parsed.get("c50"),
-                                    })
-                                except Exception:
-                                    log.exception("GT: on_sample callback raised")
+                            self._deliver_sample(parsed)
                 else:
                     time.sleep(0.05)
         finally:

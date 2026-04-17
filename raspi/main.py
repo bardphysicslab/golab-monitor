@@ -335,17 +335,17 @@ class GTSessionWriter:
     ) -> None:
         with self.lock:
             path = self.active_path
-        if path is None:
-            return
+            if path is None:
+                return
 
-        append_jsonl(path, {
-            "session_ts_utc": session_ts_utc,
-            "time": time_info,
-            "devices": {
-                "gt521": gt_reading,
-                "env1": env_reading,
-            },
-        })
+            append_jsonl(path, {
+                "session_ts_utc": session_ts_utc,
+                "time": time_info,
+                "devices": {
+                    "gt521": gt_reading,
+                    "env1": env_reading,
+                },
+            })
 
 
 ensure_data_dirs()
