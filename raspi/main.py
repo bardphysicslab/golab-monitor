@@ -539,18 +539,51 @@ class SessionManager:
 session_manager = SessionManager()
 
 GT_ERROR_END_REASONS = {"stopped_early", "timeout", "serial_fault", "time_invalid"}
+GT_TERMINAL_END_REASONS = {"completed", "manual_stop", *GT_ERROR_END_REASONS}
+GT_TERMINAL_STATE_DISPLAY_S = 5.0
 gt_lifecycle_lock = threading.Lock()
 gt_starting = False
+gt_terminal_state_until = 0.0
 
 def set_gt_starting(value: bool) -> None:
-    global gt_starting
+    global gt_starting, gt_terminal_state_until
     with gt_lifecycle_lock:
         gt_starting = value
+        if value:
+            gt_terminal_state_until = 0.0
     log.info("GT: lifecycle starting=%s", value)
 
 def is_gt_starting() -> bool:
     with gt_lifecycle_lock:
         return gt_starting
+
+def mark_gt_terminal_state_visible() -> None:
+    global gt_terminal_state_until
+    with gt_lifecycle_lock:
+        gt_terminal_state_until = time.time() + GT_TERMINAL_STATE_DISPLAY_S
+
+def gt_terminal_state_visible() -> bool:
+    with gt_lifecycle_lock:
+        return time.time() < gt_terminal_state_until
+
+def api_gt_state(raw_state: Dict[str, Any]) -> Dict[str, Any]:
+    state = dict(raw_state)
+    starting = is_gt_starting()
+    session_status = session_manager.status()
+    idle_ready = (
+        not starting
+        and not state.get("run_active")
+        and session_status != "running"
+        and not gt_terminal_state_visible()
+    )
+    state["gt_starting"] = starting
+    state["gt_idle_ready"] = idle_ready
+    if idle_ready:
+        state["run_end_reason"] = None
+        state["last_op_status"] = None
+        state["last_gt_sample_timestamp"] = None
+        state["suspected_missed_samples"] = 0
+    return state
 
 def finalize_gt_session_from_state(state: Dict[str, Any]) -> None:
     if is_gt_starting():
@@ -566,7 +599,7 @@ def finalize_gt_session_from_state(state: Dict[str, Any]) -> None:
         return
 
     reason = state.get("run_end_reason")
-    if reason not in {"completed", "manual_stop", *GT_ERROR_END_REASONS}:
+    if reason not in GT_TERMINAL_END_REASONS:
         return
 
     if session_manager.status() != "running":
@@ -586,6 +619,7 @@ def finalize_gt_session_from_state(state: Dict[str, Any]) -> None:
         session_manager.error(reason)
     elif reason == "manual_stop":
         session_manager.error("manual_stop")
+    mark_gt_terminal_state_visible()
     log.info("GT: backend session finalized — reason=%s", reason)
 
 gt_monitor_stop = threading.Event()
@@ -1278,6 +1312,9 @@ def dashboard():
                 if (j.gt_starting) {{
                   c.className = "small muted";
                   c.textContent = "Starting...";
+                }} else if (j.gt_idle_ready) {{
+                  c.className = "small muted";
+                  c.textContent = "No action yet.";
                 }} else if (j.run_active) {{
                   c.className = "small ok";
                   c.textContent = `Running — ${{received}} / ${{target}} samples`;
@@ -1684,8 +1721,8 @@ def get_state():
     status = time_status()
     state = gt.get_state()
     finalize_gt_session_from_state(state)
+    state = api_gt_state(state)
     state.update({
-        "gt_starting": is_gt_starting(),
         "settings": current_settings.dict(),
         "thresholds": t,
         "last_update": time.time(),

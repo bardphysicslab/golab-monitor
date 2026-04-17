@@ -97,6 +97,8 @@ class GT521SDriver:
         self._latest_lock = threading.Lock()
 
         self._on_sample: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._pending_samples: list[Dict[str, Any]] = []
+        self._accept_pending_startup_samples = False
 
     # ------------------------------------------------------------------
     # Bard Box driver interface
@@ -218,8 +220,14 @@ class GT521SDriver:
         log.info("GT: starting sampling (S)")
         self._cmd_start()
 
-        op = self._check_op_status()
-        log.info("GT: OP status after start: %s", op)
+        with self.state_lock:
+            self._accept_pending_startup_samples = True
+        try:
+            op = self._check_op_status()
+            log.info("GT: OP status after start: %s", op)
+        finally:
+            with self.state_lock:
+                self._accept_pending_startup_samples = False
         if op == "S":
             raise RuntimeError(f"GT did not start: OP returned '{op}' (Stopped)")
 
@@ -350,6 +358,9 @@ class GT521SDriver:
             self.consecutive_watchdog_misses = 0
             self._last_gt_sample_epoch = None
             self.sample_delivery_active = False
+            pending_samples = self._pending_samples
+            self._pending_samples = []
+            self._accept_pending_startup_samples = False
 
         self.watchdog_stop.clear()
         log.info(
@@ -359,6 +370,9 @@ class GT521SDriver:
             watchdog_timeout,
             op_status,
         )
+        for parsed in pending_samples:
+            log.info("GT: delivering pending startup sample — gt_ts=%s", parsed.get("_device_ts"))
+            self._deliver_sample(parsed)
 
     def _finalize_run(self, reason: str, force: bool = False) -> None:
         with self.state_lock:
@@ -673,7 +687,12 @@ class GT521SDriver:
                     return seen
         return seen
 
-    def send_line(self, line: bytes, read_seconds: float = 1.2) -> Tuple[bool, bytes]:
+    def send_line(
+        self,
+        line: bytes,
+        read_seconds: float = 1.2,
+        reset_input_buffer: bool = True,
+    ) -> Tuple[bool, bytes]:
         """
         Send command (CR-terminated) and collect response.
         ok=True means a '*' prompt was seen (device is responsive).
@@ -689,10 +708,11 @@ class GT521SDriver:
             all_seen = b""
             for attempt in range(3):
                 all_seen += self._poke_until_star()
-                try:
-                    self.ser.reset_input_buffer()
-                except Exception:
-                    pass
+                if reset_input_buffer:
+                    try:
+                        self.ser.reset_input_buffer()
+                    except Exception:
+                        pass
                 self.ser.write(line + b"\r")
                 self.ser.flush()
                 time.sleep(0.12)
@@ -711,7 +731,7 @@ class GT521SDriver:
     # ---- internal command shortcuts ----
     def _cmd_start(self):  return self.send_line(b"S", read_seconds=0.9)
     def _cmd_stop(self):   return self.send_line(b"E", read_seconds=0.9)
-    def _cmd_op(self):     return self.send_line(b"OP", read_seconds=0.9)
+    def _cmd_op(self):     return self.send_line(b"OP", read_seconds=0.9, reset_input_buffer=False)
 
     # ---- settings commands ----
     def _set_location_id(self, loc_id: int): return self.send_line(f"ID {loc_id:03d}".encode(), read_seconds=0.9)
@@ -770,11 +790,19 @@ class GT521SDriver:
         _, raw = self._cmd_op()
         text = raw.decode(errors="replace")
         log.info("GT_DEBUG: OP raw response — %r", text)
-        if "OP R" in text or "RUNNING" in text.upper():
+        self._capture_samples_from_command_text(text)
+        text_upper = text.upper()
+        op_matches = re.findall(r"\bOP\s+(R|S|H|STOP)\b", text_upper)
+        if op_matches:
+            latest = op_matches[-1]
+            if latest == "STOP":
+                return "S"
+            return latest
+        if "RUNNING" in text_upper:
             return "R"
-        if "OP S" in text or "OP STOP" in text or "STOPPED" in text.upper():
+        if "STOPPED" in text_upper:
             return "S"
-        if "OP H" in text or "HOLD" in text.upper():
+        if "HOLD" in text_upper:
             return "H"
         log.warning("GT: unrecognized OP response: %r", text)
         return "?"
@@ -823,6 +851,29 @@ class GT521SDriver:
         if "c03" not in out and "c50" not in out:
             return None
         return out
+
+    def _capture_samples_from_command_text(self, text: str) -> None:
+        for line in text.replace("\r", "\n").split("\n"):
+            parsed = self._parse_line(line)
+            if not parsed:
+                continue
+            with self.state_lock:
+                if self.run_active:
+                    deliver_now = True
+                elif self._accept_pending_startup_samples:
+                    deliver_now = False
+                    self._pending_samples.append(parsed)
+                else:
+                    log.warning(
+                        "GT: discarded sample captured outside active/startup window — gt_ts=%s",
+                        parsed.get("_device_ts"),
+                    )
+                    continue
+            if deliver_now:
+                log.info("GT: delivering sample captured during command response — gt_ts=%s", parsed.get("_device_ts"))
+                self._deliver_sample(parsed)
+            else:
+                log.info("GT: queued startup sample captured during command response — gt_ts=%s", parsed.get("_device_ts"))
 
     # ------------------------------------------------------------------
     # Reader thread
