@@ -320,10 +320,13 @@ class GTSessionWriter:
         with self.lock:
             self.active_path = path
         path.touch(exist_ok=True)
+        log.info("GT: session writer started — path=%s", path)
         return path
 
     def stop(self) -> None:
         with self.lock:
+            if self.active_path is not None:
+                log.info("GT: session writer stopped — path=%s", self.active_path)
             self.active_path = None
 
     def append_sample(
@@ -336,6 +339,7 @@ class GTSessionWriter:
         with self.lock:
             path = self.active_path
             if path is None:
+                log.warning("GT: append_sample skipped because session writer has no active path")
                 return
 
             append_jsonl(path, {
@@ -346,6 +350,7 @@ class GTSessionWriter:
                     "env1": env_reading,
                 },
             })
+            log.info("GT: appended session sample — path=%s ts=%s", path, session_ts_utc)
 
 
 ensure_data_dirs()
@@ -480,16 +485,18 @@ class SessionManager:
     def start(self, metadata: Dict[str, Any]) -> str:
         with self.lock:
             session_id = str(uuid.uuid4())
+            start_time = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
             self._session = {
                 "uid": GT_UID,
                 "session_id": session_id,
                 "status": "running",
-                "start_time": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "start_time": start_time,
                 "end_time": None,
                 "metadata": metadata,
                 "summary": {},
                 "data": [],
             }
+            log.info("GT: session manager started — id=%s start_time=%s metadata=%s", session_id, start_time, metadata)
             return session_id
 
     def append(self, point: SessionDataPoint) -> None:
@@ -532,8 +539,29 @@ class SessionManager:
 session_manager = SessionManager()
 
 GT_ERROR_END_REASONS = {"stopped_early", "timeout", "serial_fault", "time_invalid"}
+gt_lifecycle_lock = threading.Lock()
+gt_starting = False
+
+def set_gt_starting(value: bool) -> None:
+    global gt_starting
+    with gt_lifecycle_lock:
+        gt_starting = value
+    log.info("GT: lifecycle starting=%s", value)
+
+def is_gt_starting() -> bool:
+    with gt_lifecycle_lock:
+        return gt_starting
 
 def finalize_gt_session_from_state(state: Dict[str, Any]) -> None:
+    if is_gt_starting():
+        log.info(
+            "GT: skipping backend finalization while new run is starting — stale_reason=%s received=%s target=%s",
+            state.get("run_end_reason"),
+            state.get("received_samples"),
+            state.get("target_samples"),
+        )
+        return
+
     if state.get("run_active"):
         return
 
@@ -545,6 +573,12 @@ def finalize_gt_session_from_state(state: Dict[str, Any]) -> None:
         gt_session_writer.stop()
         return
 
+    log.info(
+        "GT: backend finalization running — reason=%s received=%s target=%s",
+        reason,
+        state.get("received_samples"),
+        state.get("target_samples"),
+    )
     gt_session_writer.stop()
     if reason == "completed":
         session_manager.complete()
@@ -780,6 +814,7 @@ def dashboard():
             let chartC50 = null;
             let pollInterval = null;
             let wasRunning = false;
+            let runBusy = false;
             let settingsInitialized = false;
             let storageTargets = [];
 
@@ -836,8 +871,11 @@ def dashboard():
 
             async function startRun() {{
               const c = document.getElementById("confirm");
+              const startBtn = document.getElementById("start-button");
+              runBusy = true;
+              if (startBtn) startBtn.disabled = true;
               c.className = "small muted";
-              c.textContent = "Applying settings...";
+              c.textContent = "Starting...";
 
               try {{
                 const settings = getSettings();
@@ -852,6 +890,7 @@ def dashboard():
                 if (!r.ok) {{
                   c.className = "small bad";
                   c.textContent = j.error || `Start failed (HTTP ${{r.status}})`;
+                  runBusy = false;
                   return;
                 }}
 
@@ -862,10 +901,12 @@ def dashboard():
                 }} else {{
                   c.className = "small bad";
                   c.textContent = j.error || `Start failed @ ${{j.applied_at}}`;
+                  runBusy = false;
                 }}
               }} catch (e) {{
                 c.className = "small bad";
                 c.textContent = "Start error";
+                runBusy = false;
                 console.error(e);
               }}
             }}
@@ -1223,15 +1264,21 @@ def dashboard():
                 }}
                 const fileSelect = document.getElementById("file-target-select");
                 if (fileSelect) {{
-                  fileSelect.disabled = !!j.run_active;
+                  fileSelect.disabled = !!j.run_active || !!j.gt_starting;
                 }}
+                const startBtn = document.getElementById("start-button");
+                runBusy = !!j.run_active || !!j.gt_starting;
+                if (startBtn) startBtn.disabled = runBusy;
 
                 const c = document.getElementById("confirm");
                 const diag = document.getElementById("run-diagnostics");
                 const received = j.received_samples ?? 0;
                 const target = j.target_samples ?? 0;
                 const reason = j.run_end_reason;
-                if (j.run_active) {{
+                if (j.gt_starting) {{
+                  c.className = "small muted";
+                  c.textContent = "Starting...";
+                }} else if (j.run_active) {{
                   c.className = "small ok";
                   c.textContent = `Running — ${{received}} / ${{target}} samples`;
                   if (!wasRunning) {{
@@ -1347,14 +1394,14 @@ def dashboard():
                     warnEl.textContent = "";
                     warnEl.className = "small muted";
                   }}
-                  if (startBtn) startBtn.disabled = false;
+                  if (startBtn) startBtn.disabled = runBusy;
                 }} else if (j.source === "rtc_holdover") {{
                   if (warnEl) {{
                     warnEl.style.display = "block";
                     warnEl.className = "small muted";
                     warnEl.textContent = "TIME OK — RTC holdover (NTP not currently synced)";
                   }}
-                  if (startBtn) startBtn.disabled = false;
+                  if (startBtn) startBtn.disabled = runBusy;
                 }} else {{
                   if (warnEl) {{
                     warnEl.style.display = "block";
@@ -1391,6 +1438,17 @@ def start(settings: RunSettings):
             "ok": False,
             "error": "System time invalid; RTC/NTP sync required before logging."
         }, status_code=503)
+    if is_gt_starting():
+        return JSONResponse({
+            "ok": False,
+            "error": "GT run is already starting."
+        }, status_code=409)
+    current_gt_state = gt.get_state()
+    if current_gt_state.get("run_active"):
+        return JSONResponse({
+            "ok": False,
+            "error": "GT run is already active."
+        }, status_code=409)
 
     current_settings = settings
     applied_at = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1403,6 +1461,7 @@ def start(settings: RunSettings):
 
     def on_sample(parsed: Dict[str, Any]) -> None:
         session_ts_utc = utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        log.info("GT: on_sample started — ts=%s parsed=%s", session_ts_utc, parsed)
         sample_time_status = time_status(force_refresh=True)
         if not sample_time_status["valid"]:
             log.error("GT: dropping sample and finalizing session because system time is invalid")
@@ -1438,6 +1497,7 @@ def start(settings: RunSettings):
             gt_reading=gt.get_reading(),
             env_reading=env_reading,
         )
+        log.info("GT: on_sample completed — ts=%s", session_ts_utc)
 
     session_dir, session_dir_error = resolve_current_session_dir()
     if session_dir_error:
@@ -1448,11 +1508,14 @@ def start(settings: RunSettings):
             "error": session_dir_error,
         }, status_code=400)
 
-    session_id = session_manager.start(metadata=settings_dict)
-    session_path = gt_session_writer.start(applied_at, sessions_dir=session_dir)
-
+    session_id: Optional[str] = None
+    set_gt_starting(True)
     try:
+        session_id = session_manager.start(metadata=settings_dict)
+        session_path = gt_session_writer.start(applied_at, sessions_dir=session_dir)
+        log.info("GT: calling driver start_session — id=%s settings=%s", session_id, settings_dict)
         result = gt.start_session(settings_dict, on_sample=on_sample)
+        log.info("GT: driver start_session returned — id=%s result=%s state=%s", session_id, result, gt.get_state())
         log.info("GT: session started — id=%s", session_id)
         log.info("GT: local session file — %s", session_path)
         return JSONResponse({
@@ -1470,13 +1533,16 @@ def start(settings: RunSettings):
     except Exception as e:
         log.exception("GT: start_session failed")
         gt_session_writer.stop()
-        session_manager.error(str(e))
+        if session_id is not None:
+            session_manager.error(str(e))
         return JSONResponse({
             "ok": False,
             "applied_at": applied_at,
             "requested": settings_dict,
             "error": str(e),
         }, status_code=500)
+    finally:
+        set_gt_starting(False)
 
 @app.post("/gt/stop")
 def stop():
@@ -1619,6 +1685,7 @@ def get_state():
     state = gt.get_state()
     finalize_gt_session_from_state(state)
     state.update({
+        "gt_starting": is_gt_starting(),
         "settings": current_settings.dict(),
         "thresholds": t,
         "last_update": time.time(),

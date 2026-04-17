@@ -199,6 +199,7 @@ class GT521SDriver:
         Returns dict with ok, applied, mismatch, op_status.
         Raises RuntimeError on failure.
         """
+        log.info("GT: driver start_session begin — settings=%s", settings)
         self._on_sample = on_sample
 
         log.info("GT: opening serial port %s", self._port)
@@ -227,6 +228,7 @@ class GT521SDriver:
         self._ensure_reader()
         self._ensure_watchdog()
 
+        log.info("GT: driver start_session ready — state=%s", self.get_state())
         return {
             "ok": True,
             "applied": applied,
