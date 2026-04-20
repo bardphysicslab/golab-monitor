@@ -50,7 +50,7 @@ ENV_NODES = [
     {
         "uid": "bb-0003",
         "label": "Env Node 2",
-        "port": "/dev/serial/by-id/usb-Adafruit_Feather_ESP32-S3_No_PSRAM_b4:3a:45:33:bd:90-if00",
+        "port": "/dev/serial/by-id/usb-Adafruit_Feather_ESP32-S3_No_PSRAM_b4:3a:45:33:bd:a4-if00",
         "baud": 115200,
     },
 ]
