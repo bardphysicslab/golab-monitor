@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 PORT = "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_Y10162-if00-port0"
 BAUD = 9600
 
-ENV_PORT = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_03536383236351C09231-if00"
+ENV_PORT = "/dev/serial/by-id/usb-Adafruit_Feather_ESP32-S3_No_PSRAM_b4:3a:45:33:bd:90-if00"
 ENV_BAUD = 115200
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast?latitude=41.93&longitude=-73.91&current_weather=true"
