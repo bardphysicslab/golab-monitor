@@ -35,13 +35,25 @@ log = logging.getLogger(__name__)
 PORT = "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_Y10162-if00-port0"
 BAUD = 9600
 
-ENV_PORT = "/dev/serial/by-id/usb-Adafruit_Feather_ESP32-S3_No_PSRAM_b4:3a:45:33:bd:90-if00"
-ENV_BAUD = 115200
-
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast?latitude=41.93&longitude=-73.91&current_weather=true"
 
-ENV1_UID = "bb-0001"
 GT_UID = "bb-0002"
+ENV1_UID = "bb-0001"
+
+ENV_NODES = [
+    {
+        "uid": "bb-0001",
+        "label": "Env Node 1",
+        "port": "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_03536383236351C09231-if00",
+        "baud": 115200,
+    },
+    {
+        "uid": "bb-0003",
+        "label": "Env Node 2",
+        "port": "/dev/serial/by-id/usb-PLACEHOLDER_SECOND_ENV_NODE",
+        "baud": 115200,
+    },
+]
 
 DEFAULT_LOCATION_LABEL = "GoLab"
 DEFAULT_LOCATION_ID = 1
@@ -157,10 +169,48 @@ def append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
         f.write(json.dumps(obj, separators=(",", ":"), default=str))
         f.write("\n")
 
-def get_env_reading() -> Dict[str, Any]:
-    reading = env.get_reading()
-    reading["uid"] = ENV1_UID
-    return reading
+env_drivers: Dict[str, Dict[str, Any]] = {}
+
+def configured_env_uid(index: int = 0) -> Optional[str]:
+    if not ENV_NODES:
+        return None
+    if index < len(ENV_NODES):
+        return str(ENV_NODES[index]["uid"])
+    return str(ENV_NODES[0]["uid"])
+
+def env_device_key(uid: str) -> str:
+    for idx, node in enumerate(ENV_NODES, start=1):
+        if node["uid"] == uid:
+            return f"env{idx}"
+    return uid
+
+def normalize_env_reading(uid: str, reading: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if reading is None:
+        return None
+    out = dict(reading)
+    if not out.get("uid") or out.get("uid") == "unknown":
+        out["uid"] = uid
+    return out
+
+def get_env_reading(uid: str) -> Dict[str, Any]:
+    entry = env_drivers.get(uid)
+    if entry is None:
+        raise KeyError(f"Unknown env node uid: {uid}")
+    reading = entry["driver"].get_reading()
+    normalized = normalize_env_reading(uid, reading)
+    if normalized is None:
+        raise RuntimeError(f"No reading returned for env node {uid}")
+    return normalized
+
+def get_all_env_readings() -> Dict[str, Optional[Dict[str, Any]]]:
+    readings: Dict[str, Optional[Dict[str, Any]]] = {}
+    for uid in env_drivers:
+        try:
+            readings[uid] = get_env_reading(uid)
+        except Exception:
+            log.exception("ENV: failed to read %s", uid)
+            readings[uid] = None
+    return readings
 
 def local_date_str(dt: Optional[datetime] = None) -> str:
     if dt is None:
@@ -227,14 +277,16 @@ class EnvDailyAccumulator:
             node["samples"] += 1
             node["last_timestamp"] = reading_ts
 
-    def latest(self, uid: str = ENV1_UID) -> Optional[Dict[str, Any]]:
+    def latest(self, uid: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        uid = uid or configured_env_uid() or ENV1_UID
         with self.lock:
             node = self._nodes.get(uid)
             if node is None:
                 return None
             return node.get("latest")
 
-    def current_averages(self, uid: str = ENV1_UID) -> Dict[str, float]:
+    def current_averages(self, uid: Optional[str] = None) -> Dict[str, float]:
+        uid = uid or configured_env_uid() or ENV1_UID
         key_map = {
             "temp_c_avg": "temp_c",
             "rh_pct_avg": "rh_pct",
@@ -334,7 +386,7 @@ class GTSessionWriter:
         session_ts_utc: str,
         time_info: Dict[str, Any],
         gt_reading: Optional[Dict[str, Any]],
-        env_reading: Optional[Dict[str, Any]],
+        env_readings: Optional[Dict[str, Optional[Dict[str, Any]]]],
     ) -> None:
         with self.lock:
             path = self.active_path
@@ -342,13 +394,15 @@ class GTSessionWriter:
                 log.warning("GT: append_sample skipped because session writer has no active path")
                 return
 
+            devices: Dict[str, Any] = {"gt521": gt_reading}
+            if env_readings:
+                for uid, reading in env_readings.items():
+                    devices[env_device_key(uid)] = reading
+
             append_jsonl(path, {
                 "session_ts_utc": session_ts_utc,
                 "time": time_info,
-                "devices": {
-                    "gt521": gt_reading,
-                    "env1": env_reading,
-                },
+                "devices": devices,
             })
             log.info("GT: appended session sample — path=%s ts=%s", path, session_ts_utc)
 
@@ -651,12 +705,22 @@ time.sleep(3.0)  # let GT settle before opening Arduino port
 # ENV NODE DRIVER
 # =========================
 
-env = EnvDriver(port=ENV_PORT, baud=ENV_BAUD)
-try:
-    env.connect()
-    log.info("ENV: connected")
-except Exception:
-    log.exception("ENV: failed to connect")
+for node in ENV_NODES:
+    uid = str(node["uid"])
+    driver = EnvDriver(port=str(node["port"]), baud=int(node["baud"]))
+    env_drivers[uid] = {
+        "config": node,
+        "driver": driver,
+    }
+    try:
+        driver.connect()
+        info = driver.get_info()
+        if info.get("uid") and info.get("uid") != "unknown":
+            log.info("ENV: connected uid=%s label=%s port=%s", info.get("uid"), node["label"], node["port"])
+        else:
+            log.warning("ENV: not connected yet uid=%s label=%s port=%s", uid, node["label"], node["port"])
+    except Exception:
+        log.exception("ENV: failed to connect uid=%s label=%s port=%s", uid, node["label"], node["port"])
 
 gt_monitor_thread = threading.Thread(target=monitor_gt_session_state, daemon=True)
 gt_monitor_thread.start()
@@ -1521,18 +1585,18 @@ def start(settings: RunSettings):
         )
         session_manager.append(dp)
 
-        try:
-            env_reading = get_env_reading()
-            env_daily_accumulator.update(env_reading)
-        except Exception:
-            log.exception("ENV: failed to read latest sample for GT session record")
-            env_reading = env_daily_accumulator.latest()
+        env_readings = get_all_env_readings()
+        for uid, env_reading in env_readings.items():
+            if env_reading is not None:
+                env_daily_accumulator.update(env_reading)
+            else:
+                env_readings[uid] = env_daily_accumulator.latest(uid)
 
         gt_session_writer.append_sample(
             session_ts_utc=session_ts_utc,
             time_info=time_metadata(sample_time_status, utc=session_ts_utc),
             gt_reading=gt.get_reading(),
-            env_reading=env_reading,
+            env_readings=env_readings,
         )
         log.info("GT: on_sample completed — ts=%s", session_ts_utc)
 
@@ -1605,20 +1669,51 @@ def get_latest():
     return JSONResponse({"latest": gt.get_reading()})
 
 @app.get("/env/latest")
-def get_env_latest():
+def get_env_latest(uid: Optional[str] = None):
+    selected_uid = uid or configured_env_uid() or ENV1_UID
+    if selected_uid not in env_drivers:
+        first_uid = configured_env_uid()
+        if uid is None and first_uid:
+            selected_uid = first_uid
+        else:
+            return JSONResponse({
+                "latest": None,
+                "averages": {},
+                "error": f"Unknown env node uid: {selected_uid}",
+            }, status_code=404)
+
     try:
-        reading = get_env_reading()
+        reading = get_env_reading(selected_uid)
         env_daily_accumulator.update(reading)
+        averages_uid = reading.get("uid") or selected_uid
         return JSONResponse({
             "latest": reading,
-            "averages": env_daily_accumulator.current_averages(),
+            "averages": env_daily_accumulator.current_averages(averages_uid),
         })
     except Exception as e:
         return JSONResponse({
-            "latest": None,
-            "averages": env_daily_accumulator.current_averages(),
+            "latest": env_daily_accumulator.latest(selected_uid),
+            "averages": env_daily_accumulator.current_averages(selected_uid),
             "error": str(e),
         })
+
+@app.get("/env/all")
+def get_env_all():
+    nodes: Dict[str, Dict[str, Any]] = {}
+    readings = get_all_env_readings()
+    for uid in env_drivers:
+        reading = readings.get(uid)
+        if reading is not None:
+            env_daily_accumulator.update(reading)
+            averages_uid = reading.get("uid") or uid
+        else:
+            reading = env_daily_accumulator.latest(uid)
+            averages_uid = uid
+        nodes[uid] = {
+            "latest": reading,
+            "averages": env_daily_accumulator.current_averages(averages_uid),
+        }
+    return JSONResponse({"nodes": nodes})
 
 @app.get("/gt/session-data")
 def get_session_data():
