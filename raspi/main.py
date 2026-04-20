@@ -793,8 +793,13 @@ def dashboard():
             .threshold-status.safe {{ background: var(--safe-bg); color: var(--safe-text); }}
             .threshold-status.exceeded {{ background: var(--exceeded-bg); color: var(--exceeded-text); }}
 
-            .env-grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap:20px; }}
-            @media (max-width: 900px) {{ .env-grid {{ grid-template-columns: repeat(2, 1fr); }} }}
+            .env-nodes-grid {{ display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:18px; }}
+            .env-node-panel {{ border:1px solid var(--panel-border); border-radius:8px; padding:16px; background:#0b0b0b; }}
+            .env-node-title {{ font-size:16px; font-weight:700; margin-bottom:14px; color:var(--text); }}
+            .env-grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap:16px; }}
+            .env-value {{ font-size:28px; font-weight:700; }}
+            @media (max-width: 1100px) {{ .env-grid {{ grid-template-columns: repeat(3, 1fr); }} }}
+            @media (max-width: 900px) {{ .env-nodes-grid {{ grid-template-columns: 1fr; }} .env-grid {{ grid-template-columns: repeat(2, 1fr); }} }}
         </style>
     </head>
     <body>
@@ -883,12 +888,27 @@ def dashboard():
 
         <div class="card" style="margin-top: 20px;">
           <h3>Environment Node (trend only)</h3>
-          <div class="env-grid">
-            <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_c03" style="font-size:28px;font-weight:700;">—</div><div id="env_c03_avg" class="small muted">Avg: —</div></div>
-            <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_c05" style="font-size:28px;font-weight:700;">—</div><div id="env_c05_avg" class="small muted">Avg: —</div></div>
-            <div><div class="small muted">&gt;1.0µm /m³</div><div id="env_c10" style="font-size:28px;font-weight:700;">—</div><div id="env_c10_avg" class="small muted">Avg: —</div></div>
-            <div><div class="small muted">Temp (°C)</div><div id="env_temp" style="font-size:28px;font-weight:700;">—</div><div id="env_temp_avg" class="small muted">Avg: —</div></div>
-            <div><div class="small muted">RH (%)</div><div id="env_rh" style="font-size:28px;font-weight:700;">—</div><div id="env_rh_avg" class="small muted">Avg: —</div></div>
+          <div class="env-nodes-grid">
+            <div class="env-node-panel">
+              <div class="env-node-title">Env Node 1 (bb-0001)</div>
+              <div class="env-grid">
+                <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0001_c03" class="env-value">—</div><div id="env_bb_0001_c03_avg" class="small muted">Avg: —</div></div>
+                <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0001_c05" class="env-value">—</div><div id="env_bb_0001_c05_avg" class="small muted">Avg: —</div></div>
+                <div><div class="small muted">&gt;1.0µm /m³</div><div id="env_bb_0001_c10" class="env-value">—</div><div id="env_bb_0001_c10_avg" class="small muted">Avg: —</div></div>
+                <div><div class="small muted">Temp (°C)</div><div id="env_bb_0001_temp" class="env-value">—</div><div id="env_bb_0001_temp_avg" class="small muted">Avg: —</div></div>
+                <div><div class="small muted">RH (%)</div><div id="env_bb_0001_rh" class="env-value">—</div><div id="env_bb_0001_rh_avg" class="small muted">Avg: —</div></div>
+              </div>
+            </div>
+            <div class="env-node-panel">
+              <div class="env-node-title">Env Node 2 (bb-0003)</div>
+              <div class="env-grid">
+                <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0003_c03" class="env-value">—</div><div id="env_bb_0003_c03_avg" class="small muted">Avg: —</div></div>
+                <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0003_c05" class="env-value">—</div><div id="env_bb_0003_c05_avg" class="small muted">Avg: —</div></div>
+                <div><div class="small muted">&gt;1.0µm /m³</div><div id="env_bb_0003_c10" class="env-value">—</div><div id="env_bb_0003_c10_avg" class="small muted">Avg: —</div></div>
+                <div><div class="small muted">Temp (°C)</div><div id="env_bb_0003_temp" class="env-value">—</div><div id="env_bb_0003_temp_avg" class="small muted">Avg: —</div></div>
+                <div><div class="small muted">RH (%)</div><div id="env_bb_0003_rh" class="env-value">—</div><div id="env_bb_0003_rh_avg" class="small muted">Avg: —</div></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -931,6 +951,41 @@ def dashboard():
 
             function avgText(value) {{
               return value === null || value === undefined ? "Avg: —" : `Avg: ${{Number(value).toFixed(2)}}`;
+            }}
+
+            function setText(id, value) {{
+              const el = document.getElementById(id);
+              if (el) el.textContent = value;
+            }}
+
+            function resetEnvNode(prefix) {{
+              ["c03", "c05", "c10", "temp", "rh"].forEach(metric => {{
+                setText(`${{prefix}}_${{metric}}`, "—");
+                setText(`${{prefix}}_${{metric}}_avg`, "Avg: —");
+              }});
+            }}
+
+            function updateEnvNode(uid, prefix, node) {{
+              const latest = node?.latest;
+              const avg = node?.averages || {{}};
+              if (!latest) {{
+                resetEnvNode(prefix);
+                return;
+              }}
+
+              const d = latest.data || {{}};
+              const x = latest.extended || {{}};
+              setText(`${{prefix}}_c03`, (pmsCountToM3(d.c03) ?? "—").toString());
+              setText(`${{prefix}}_c05`, (pmsCountToM3(x.c05) ?? "—").toString());
+              setText(`${{prefix}}_c10`, (pmsCountToM3(x.c10) ?? "—").toString());
+              setText(`${{prefix}}_temp`, (d.temp_c ?? "—").toString());
+              setText(`${{prefix}}_rh`, (x.rh_pct ?? "—").toString());
+
+              setText(`${{prefix}}_c03_avg`, avgText(pmsCountToM3(avg.c03)));
+              setText(`${{prefix}}_c05_avg`, avgText(pmsCountToM3(avg.c05)));
+              setText(`${{prefix}}_c10_avg`, avgText(pmsCountToM3(avg.c10)));
+              setText(`${{prefix}}_temp_avg`, avgText(avg.temp_c));
+              setText(`${{prefix}}_rh_avg`, avgText(avg.rh_pct));
             }}
 
             function initializeCharts() {{
@@ -1041,27 +1096,15 @@ def dashboard():
 
             async function pollEnv() {{
               try {{
-                const r = await fetch("/env/latest");
+                const r = await fetch("/env/all");
                 const j = await r.json();
-
-                if (j && j.latest) {{
-                  const d = j.latest.data || {{}};
-                  const x = j.latest.extended || {{}};
-                  const avg = j.averages || {{}};
-
-                  document.getElementById("env_c03").textContent = (pmsCountToM3(d.c03) ?? "—").toString();
-                  document.getElementById("env_c05").textContent = (pmsCountToM3(x.c05) ?? "—").toString();
-                  document.getElementById("env_c10").textContent = (pmsCountToM3(x.c10) ?? "—").toString();
-                  document.getElementById("env_temp").textContent = (d.temp_c ?? "—").toString();
-                  document.getElementById("env_rh").textContent = (x.rh_pct ?? "—").toString();
-
-                  document.getElementById("env_c03_avg").textContent = avgText(pmsCountToM3(avg.c03));
-                  document.getElementById("env_c05_avg").textContent = avgText(pmsCountToM3(avg.c05));
-                  document.getElementById("env_c10_avg").textContent = avgText(pmsCountToM3(avg.c10));
-                  document.getElementById("env_temp_avg").textContent = avgText(avg.temp_c);
-                  document.getElementById("env_rh_avg").textContent = avgText(avg.rh_pct);
-                }}
-              }} catch (e) {{}}
+                const nodes = j?.nodes || {{}};
+                updateEnvNode("bb-0001", "env_bb_0001", nodes["bb-0001"]);
+                updateEnvNode("bb-0003", "env_bb_0003", nodes["bb-0003"]);
+              }} catch (e) {{
+                resetEnvNode("env_bb_0001");
+                resetEnvNode("env_bb_0003");
+              }}
             }}
 
             async function fetchSessionData() {{
