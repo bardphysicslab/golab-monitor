@@ -899,19 +899,20 @@ def dashboard():
             .threshold-status.safe {{ background: var(--safe-bg); color: var(--safe-text); }}
             .threshold-status.exceeded {{ background: var(--exceeded-bg); color: var(--exceeded-text); }}
 
-            .env-nodes-grid {{ display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:18px; }}
-            .env-node-panel {{ border:1px solid var(--panel-border); border-radius:8px; padding:16px; background:#0b0b0b; }}
-            .env-node-panel.error {{ border-color: var(--bad); }}
-            .env-node-head {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }}
-            .env-node-title {{ font-size:16px; font-weight:700; margin-bottom:14px; color:var(--text); }}
-            .env-node-head .env-node-title {{ margin-bottom:0; }}
+            .env-nodes-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(270px, 320px)); gap:16px; justify-content:start; }}
+            .env-node-card {{ width:100%; max-width:320px; border:1px solid var(--panel-border); border-radius:8px; padding:14px; background:#0b0b0b; }}
+            .env-node-card.error {{ border-color: var(--bad); }}
+            .env-node-head {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }}
+            .env-node-title {{ font-size:16px; font-weight:750; color:var(--text); line-height:1.2; }}
+            .env-node-subtitle {{ margin-top:3px; color:var(--muted); font-size:12px; line-height:1.3; }}
+            .env-node-uid {{ margin-top:4px; color:var(--muted); font-size:12px; line-height:1.3; }}
             .env-status {{ flex:0 0 auto; border-radius:999px; border:1px solid currentColor; padding:4px 8px; font-size:12px; font-weight:800; line-height:1; color:var(--ok); }}
             .env-status.error {{ color:var(--bad); }}
-            .env-node-note {{ margin-top:14px; color:var(--muted); font-size:12px; }}
-            .env-grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap:16px; }}
-            .env-value {{ font-size:28px; font-weight:700; }}
-            @media (max-width: 1100px) {{ .env-grid {{ grid-template-columns: repeat(3, 1fr); }} }}
-            @media (max-width: 900px) {{ .env-nodes-grid {{ grid-template-columns: 1fr; }} .env-grid {{ grid-template-columns: repeat(2, 1fr); }} }}
+            .env-node-note {{ margin-top:12px; color:var(--muted); font-size:12px; line-height:1.35; }}
+            .env-grid {{ display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; }}
+            .env-metric {{ min-width:0; border:1px solid var(--panel-border); border-radius:8px; padding:10px; background:var(--panel); }}
+            .env-value {{ min-height:27px; overflow-wrap:anywhere; font-size:24px; font-weight:750; line-height:1.1; }}
+            @media (max-width: 700px) {{ .env-nodes-grid {{ grid-template-columns: minmax(0, 1fr); }} .env-node-card {{ max-width:none; }} .env-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
         </style>
     </head>
     <body>
@@ -999,33 +1000,43 @@ def dashboard():
         </div>
 
         <div class="card" style="margin-top: 20px;">
-          <h3>Environment Node (trend only)</h3>
+          <h3>Environmental Nodes</h3>
           <div class="env-nodes-grid">
-            <div class="env-node-panel">
+            <div class="env-node-card">
               <div class="env-node-head">
-                <div class="env-node-title">Env Node 1 (bb-0001)</div>
+                <div>
+                  <div class="env-node-title">Env Node 1</div>
+                  <div class="env-node-subtitle">Environmental monitor</div>
+                  <div class="env-node-uid">UID bb-0001</div>
+                </div>
                 <div id="env_bb_0001_status" class="env-status">OK</div>
               </div>
               <div class="env-grid">
-                <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0001_c03" class="env-value">—</div><div id="env_bb_0001_c03_avg" class="small muted">Avg: —</div></div>
-                <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0001_c05" class="env-value">—</div><div id="env_bb_0001_c05_avg" class="small muted">Avg: —</div></div>
-                <div><div class="small muted">&gt;1.0µm /m³</div><div id="env_bb_0001_c10" class="env-value">—</div><div id="env_bb_0001_c10_avg" class="small muted">Avg: —</div></div>
-                <div><div class="small muted">Temp (°C)</div><div id="env_bb_0001_temp" class="env-value">—</div><div id="env_bb_0001_temp_avg" class="small muted">Avg: —</div></div>
-                <div><div class="small muted">RH (%)</div><div id="env_bb_0001_rh" class="env-value">—</div><div id="env_bb_0001_rh_avg" class="small muted">Avg: —</div></div>
+                <div class="env-metric"><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0001_c03" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0001_c05" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">&gt;1.0µm /m³</div><div id="env_bb_0001_c10" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">Temp (°C)</div><div id="env_bb_0001_temp" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">RH (%)</div><div id="env_bb_0001_rh" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">Pressure (Pa)</div><div id="env_bb_0001_press" class="env-value">—</div></div>
               </div>
               <div id="env_bb_0001_note" class="env-node-note">Waiting for live reading.</div>
             </div>
-            <div class="env-node-panel">
+            <div class="env-node-card">
               <div class="env-node-head">
-                <div class="env-node-title">Env Node 2 (bb-0003)</div>
+                <div>
+                  <div class="env-node-title">Env Node 2</div>
+                  <div class="env-node-subtitle">Environmental monitor</div>
+                  <div class="env-node-uid">UID bb-0003</div>
+                </div>
                 <div id="env_bb_0003_status" class="env-status">OK</div>
               </div>
               <div class="env-grid">
-                <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0003_c03" class="env-value">—</div><div id="env_bb_0003_c03_avg" class="small muted">Avg: —</div></div>
-                <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0003_c05" class="env-value">—</div><div id="env_bb_0003_c05_avg" class="small muted">Avg: —</div></div>
-                <div><div class="small muted">&gt;1.0µm /m³</div><div id="env_bb_0003_c10" class="env-value">—</div><div id="env_bb_0003_c10_avg" class="small muted">Avg: —</div></div>
-                <div><div class="small muted">Temp (°C)</div><div id="env_bb_0003_temp" class="env-value">—</div><div id="env_bb_0003_temp_avg" class="small muted">Avg: —</div></div>
-                <div><div class="small muted">RH (%)</div><div id="env_bb_0003_rh" class="env-value">—</div><div id="env_bb_0003_rh_avg" class="small muted">Avg: —</div></div>
+                <div class="env-metric"><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0003_c03" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0003_c05" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">&gt;1.0µm /m³</div><div id="env_bb_0003_c10" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">Temp (°C)</div><div id="env_bb_0003_temp" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">RH (%)</div><div id="env_bb_0003_rh" class="env-value">—</div></div>
+                <div class="env-metric"><div class="small muted">Pressure (Pa)</div><div id="env_bb_0003_press" class="env-value">—</div></div>
               </div>
               <div id="env_bb_0003_note" class="env-node-note">Waiting for live reading.</div>
             </div>
@@ -1088,7 +1099,7 @@ def dashboard():
             function setEnvNodeStatus(prefix, ok, message, lastSeen) {{
               const statusEl = document.getElementById(`${{prefix}}_status`);
               const noteEl = document.getElementById(`${{prefix}}_note`);
-              const panel = statusEl?.closest(".env-node-panel");
+              const panel = statusEl?.closest(".env-node-card");
               if (statusEl) {{
                 statusEl.textContent = ok ? "OK" : "ERROR";
                 statusEl.classList.toggle("error", !ok);
@@ -1096,13 +1107,13 @@ def dashboard():
               panel?.classList.toggle("error", !ok);
               if (noteEl) {{
                 noteEl.textContent = ok
-                  ? `Last seen: ${{formatTimestamp(lastSeen)}}`
+                  ? `Last reading: ${{formatTimestamp(lastSeen)}}`
                   : `${{message || "Node unavailable"}}. Last seen: ${{formatTimestamp(lastSeen)}}`;
               }}
             }}
 
             function resetEnvNode(prefix) {{
-              ["c03", "c05", "c10", "temp", "rh"].forEach(metric => {{
+              ["c03", "c05", "c10", "temp", "rh", "press"].forEach(metric => {{
                 setText(`${{prefix}}_${{metric}}`, "—");
                 setText(`${{prefix}}_${{metric}}_avg`, "Avg: —");
               }});
@@ -1132,6 +1143,7 @@ def dashboard():
               setText(`${{prefix}}_c10`, (pmsCountToM3(x.c10) ?? "—").toString());
               setText(`${{prefix}}_temp`, (d.temp_c ?? "—").toString());
               setText(`${{prefix}}_rh`, (x.rh_pct ?? "—").toString());
+              setText(`${{prefix}}_press`, (x.press_pa ?? d.press_pa ?? "—").toString());
 
               setText(`${{prefix}}_c03_avg`, avgText(pmsCountToM3(avg.c03)));
               setText(`${{prefix}}_c05_avg`, avgText(pmsCountToM3(avg.c05)));
