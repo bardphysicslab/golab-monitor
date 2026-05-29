@@ -209,6 +209,12 @@ def env_reading_age_s(reading: Dict[str, Any]) -> Optional[float]:
         return None
     return max(0.0, (utc_now() - parsed).total_seconds())
 
+def env_last_seen(reading: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not reading:
+        return None
+    extended = reading.get("extended") or {}
+    return extended.get("last_seen") or reading.get("timestamp")
+
 def env_unavailable_reading(
     uid: str,
     message: str = "Node unavailable",
@@ -276,10 +282,11 @@ def env_response_for_uid(uid: str) -> Dict[str, Any]:
 
     freshness_error = env_freshness_error(reading)
     if freshness_error:
+        last_seen = env_last_seen(reading)
         return {
-            "latest": env_unavailable_reading(uid, freshness_error, reading.get("timestamp")),
+            "latest": env_unavailable_reading(uid, freshness_error, last_seen),
             "averages": env_daily_accumulator.current_averages(uid),
-            "last_seen": reading.get("timestamp"),
+            "last_seen": last_seen,
             "error": freshness_error,
         }
 
@@ -1790,7 +1797,7 @@ def start(settings: RunSettings):
                 env_readings[uid] = env_unavailable_reading(
                     uid,
                     freshness_error,
-                    env_reading.get("timestamp"),
+                    env_last_seen(env_reading),
                 )
             else:
                 env_daily_accumulator.update(env_reading)

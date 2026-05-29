@@ -36,6 +36,9 @@ V1_EXTENDED_CHANNELS = [
     "sample_idx",
 ]
 
+NULL_DATA = {channel: None for channel in V1_DATA_CHANNELS}
+NULL_EXTENDED = {channel: None for channel in V1_EXTENDED_CHANNELS}
+
 # Expected HDR field list (after HDR,v1)
 EXPECTED_HDR_FIELDS = [
     "sample_idx", "temp_c", "rh_pct", "press_pa",
@@ -148,29 +151,41 @@ class BardboxEnvNodeV1Driver:
             return {
                 "uid": uid,
                 "timestamp": now_iso,
-                "status": "error",
-                "data": {
-                    "temp_c": None,
-                    "pm1_std": None,
-                    "pm25_std": None,
-                    "pm10_std": None,
-                    "c03": None,
+                "status": "node_unavailable",
+                "data": dict(NULL_DATA),
+                "extended": {
+                    **NULL_EXTENDED,
+                    "last_seen": None,
+                    "message": "No node found",
                 },
-                "extended": {},
                 "raw": None,
                 "error": "no valid reading received yet",
             }
 
         age = time.monotonic() - latest_time
-        status = "ok" if age <= STALE_THRESHOLD_S else "stale"
+        if age > STALE_THRESHOLD_S:
+            return {
+                "uid": uid,
+                "timestamp": now_iso,
+                "status": "node_unavailable",
+                "data": dict(NULL_DATA),
+                "extended": {
+                    **NULL_EXTENDED,
+                    "last_seen": latest.get("_timestamp"),
+                    "message": "Node unavailable",
+                },
+                "raw": None,
+                "error": "Node unavailable",
+            }
 
         data = {k: latest.get(k) for k in V1_DATA_CHANNELS}
         extended = {k: latest.get(k) for k in V1_EXTENDED_CHANNELS}
+        extended["last_seen"] = latest["_timestamp"]
 
         return {
             "uid": uid,
             "timestamp": latest["_timestamp"],
-            "status": status,
+            "status": "ok",
             "data": data,
             "extended": extended,
             "raw": None,
