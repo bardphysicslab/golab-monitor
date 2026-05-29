@@ -60,6 +60,7 @@ DEFAULT_LOCATION_ID = 1
 DEFAULT_SAMPLE_TIME_S = 10
 DEFAULT_HOLD_TIME_S = 50
 DEFAULT_SAMPLES = 480
+ENV_NODE_STALE_AFTER_S = float(os.environ.get("GOLAB_ENV_NODE_STALE_AFTER_S", "30"))
 
 DATA_DIR = Path.home() / "golab-monitor" / "data"
 GT_SESSIONS_DIR = DATA_DIR / "sessions"
@@ -191,6 +192,104 @@ def normalize_env_reading(uid: str, reading: Optional[Dict[str, Any]]) -> Option
     if not out.get("uid") or out.get("uid") == "unknown":
         out["uid"] = uid
     return out
+
+def parse_utc_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+def env_reading_age_s(reading: Dict[str, Any]) -> Optional[float]:
+    parsed = parse_utc_timestamp(reading.get("timestamp"))
+    if parsed is None:
+        return None
+    return max(0.0, (utc_now() - parsed).total_seconds())
+
+def env_unavailable_reading(
+    uid: str,
+    message: str = "Node unavailable",
+    last_seen: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "uid": uid,
+        "timestamp": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": "node_unavailable",
+        "data": {
+            "temp_c": None,
+            "pm1_std": None,
+            "pm25_std": None,
+            "pm10_std": None,
+            "c03": None,
+        },
+        "extended": {
+            "rh_pct": None,
+            "press_pa": None,
+            "pm1_env": None,
+            "pm25_env": None,
+            "pm10_env": None,
+            "c05": None,
+            "c10": None,
+            "c25": None,
+            "c50": None,
+            "c100": None,
+            "sample_idx": None,
+            "message": message,
+            "last_seen": last_seen,
+            "stale_after_s": ENV_NODE_STALE_AFTER_S,
+        },
+        "raw": None,
+        "error": message,
+    }
+
+def env_freshness_error(reading: Dict[str, Any]) -> Optional[str]:
+    status = reading.get("status")
+    if status != "ok":
+        return "No node found" if status == "error" else "Node unavailable"
+
+    age_s = env_reading_age_s(reading)
+    if age_s is None:
+        return "Node unavailable"
+    if age_s > ENV_NODE_STALE_AFTER_S:
+        return "Node unavailable"
+    return None
+
+def env_response_for_uid(uid: str) -> Dict[str, Any]:
+    try:
+        reading = get_env_reading(uid)
+    except Exception as exc:
+        log.exception("ENV: failed to read %s", uid)
+        previous = env_daily_accumulator.latest(uid)
+        return {
+            "latest": env_unavailable_reading(
+                uid,
+                "No node found",
+                previous.get("timestamp") if previous else None,
+            ),
+            "averages": env_daily_accumulator.current_averages(uid),
+            "last_seen": previous.get("timestamp") if previous else None,
+            "error": str(exc),
+        }
+
+    freshness_error = env_freshness_error(reading)
+    if freshness_error:
+        return {
+            "latest": env_unavailable_reading(uid, freshness_error, reading.get("timestamp")),
+            "averages": env_daily_accumulator.current_averages(uid),
+            "last_seen": reading.get("timestamp"),
+            "error": freshness_error,
+        }
+
+    env_daily_accumulator.update(reading)
+    averages_uid = reading.get("uid") or uid
+    return {
+        "latest": reading,
+        "averages": env_daily_accumulator.current_averages(averages_uid),
+        "last_seen": reading.get("timestamp"),
+    }
 
 def get_env_reading(uid: str) -> Dict[str, Any]:
     entry = env_drivers.get(uid)
@@ -795,7 +894,13 @@ def dashboard():
 
             .env-nodes-grid {{ display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:18px; }}
             .env-node-panel {{ border:1px solid var(--panel-border); border-radius:8px; padding:16px; background:#0b0b0b; }}
+            .env-node-panel.error {{ border-color: var(--bad); }}
+            .env-node-head {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }}
             .env-node-title {{ font-size:16px; font-weight:700; margin-bottom:14px; color:var(--text); }}
+            .env-node-head .env-node-title {{ margin-bottom:0; }}
+            .env-status {{ flex:0 0 auto; border-radius:999px; border:1px solid currentColor; padding:4px 8px; font-size:12px; font-weight:800; line-height:1; color:var(--ok); }}
+            .env-status.error {{ color:var(--bad); }}
+            .env-node-note {{ margin-top:14px; color:var(--muted); font-size:12px; }}
             .env-grid {{ display:grid; grid-template-columns: repeat(5, 1fr); gap:16px; }}
             .env-value {{ font-size:28px; font-weight:700; }}
             @media (max-width: 1100px) {{ .env-grid {{ grid-template-columns: repeat(3, 1fr); }} }}
@@ -890,7 +995,10 @@ def dashboard():
           <h3>Environment Node (trend only)</h3>
           <div class="env-nodes-grid">
             <div class="env-node-panel">
-              <div class="env-node-title">Env Node 1 (bb-0001)</div>
+              <div class="env-node-head">
+                <div class="env-node-title">Env Node 1 (bb-0001)</div>
+                <div id="env_bb_0001_status" class="env-status">OK</div>
+              </div>
               <div class="env-grid">
                 <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0001_c03" class="env-value">—</div><div id="env_bb_0001_c03_avg" class="small muted">Avg: —</div></div>
                 <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0001_c05" class="env-value">—</div><div id="env_bb_0001_c05_avg" class="small muted">Avg: —</div></div>
@@ -898,9 +1006,13 @@ def dashboard():
                 <div><div class="small muted">Temp (°C)</div><div id="env_bb_0001_temp" class="env-value">—</div><div id="env_bb_0001_temp_avg" class="small muted">Avg: —</div></div>
                 <div><div class="small muted">RH (%)</div><div id="env_bb_0001_rh" class="env-value">—</div><div id="env_bb_0001_rh_avg" class="small muted">Avg: —</div></div>
               </div>
+              <div id="env_bb_0001_note" class="env-node-note">Waiting for live reading.</div>
             </div>
             <div class="env-node-panel">
-              <div class="env-node-title">Env Node 2 (bb-0003)</div>
+              <div class="env-node-head">
+                <div class="env-node-title">Env Node 2 (bb-0003)</div>
+                <div id="env_bb_0003_status" class="env-status">OK</div>
+              </div>
               <div class="env-grid">
                 <div><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0003_c03" class="env-value">—</div><div id="env_bb_0003_c03_avg" class="small muted">Avg: —</div></div>
                 <div><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0003_c05" class="env-value">—</div><div id="env_bb_0003_c05_avg" class="small muted">Avg: —</div></div>
@@ -908,6 +1020,7 @@ def dashboard():
                 <div><div class="small muted">Temp (°C)</div><div id="env_bb_0003_temp" class="env-value">—</div><div id="env_bb_0003_temp_avg" class="small muted">Avg: —</div></div>
                 <div><div class="small muted">RH (%)</div><div id="env_bb_0003_rh" class="env-value">—</div><div id="env_bb_0003_rh_avg" class="small muted">Avg: —</div></div>
               </div>
+              <div id="env_bb_0003_note" class="env-node-note">Waiting for live reading.</div>
             </div>
           </div>
         </div>
@@ -958,11 +1071,35 @@ def dashboard():
               if (el) el.textContent = value;
             }}
 
+            function formatTimestamp(value) {{
+              if (!value) return "—";
+              const parsed = new Date(value);
+              if (Number.isNaN(parsed.getTime())) return value;
+              return parsed.toLocaleTimeString([], {{ hour: "2-digit", minute: "2-digit", second: "2-digit" }});
+            }}
+
+            function setEnvNodeStatus(prefix, ok, message, lastSeen) {{
+              const statusEl = document.getElementById(`${{prefix}}_status`);
+              const noteEl = document.getElementById(`${{prefix}}_note`);
+              const panel = statusEl?.closest(".env-node-panel");
+              if (statusEl) {{
+                statusEl.textContent = ok ? "OK" : "ERROR";
+                statusEl.classList.toggle("error", !ok);
+              }}
+              panel?.classList.toggle("error", !ok);
+              if (noteEl) {{
+                noteEl.textContent = ok
+                  ? `Last seen: ${{formatTimestamp(lastSeen)}}`
+                  : `${{message || "Node unavailable"}}. Last seen: ${{formatTimestamp(lastSeen)}}`;
+              }}
+            }}
+
             function resetEnvNode(prefix) {{
               ["c03", "c05", "c10", "temp", "rh"].forEach(metric => {{
                 setText(`${{prefix}}_${{metric}}`, "—");
                 setText(`${{prefix}}_${{metric}}_avg`, "Avg: —");
               }});
+              setEnvNodeStatus(prefix, false, "Node unavailable", null);
             }}
 
             function updateEnvNode(uid, prefix, node) {{
@@ -970,6 +1107,14 @@ def dashboard():
               const avg = node?.averages || {{}};
               if (!latest) {{
                 resetEnvNode(prefix);
+                return;
+              }}
+
+              const isAvailable = latest.status === "ok";
+              const lastSeen = node?.last_seen || latest.extended?.last_seen || latest.timestamp;
+              if (!isAvailable) {{
+                resetEnvNode(prefix);
+                setEnvNodeStatus(prefix, false, latest.extended?.message || latest.error || "Node unavailable", lastSeen);
                 return;
               }}
 
@@ -986,6 +1131,7 @@ def dashboard():
               setText(`${{prefix}}_c10_avg`, avgText(pmsCountToM3(avg.c10)));
               setText(`${{prefix}}_temp_avg`, avgText(avg.temp_c));
               setText(`${{prefix}}_rh_avg`, avgText(avg.rh_pct));
+              setEnvNodeStatus(prefix, true, "OK", lastSeen);
             }}
 
             function initializeCharts() {{
@@ -1630,10 +1776,24 @@ def start(settings: RunSettings):
 
         env_readings = get_all_env_readings()
         for uid, env_reading in env_readings.items():
-            if env_reading is not None:
-                env_daily_accumulator.update(env_reading)
+            if env_reading is None:
+                previous = env_daily_accumulator.latest(uid)
+                env_readings[uid] = env_unavailable_reading(
+                    uid,
+                    "No node found",
+                    previous.get("timestamp") if previous else None,
+                )
+                continue
+
+            freshness_error = env_freshness_error(env_reading)
+            if freshness_error:
+                env_readings[uid] = env_unavailable_reading(
+                    uid,
+                    freshness_error,
+                    env_reading.get("timestamp"),
+                )
             else:
-                env_readings[uid] = env_daily_accumulator.latest(uid)
+                env_daily_accumulator.update(env_reading)
 
         gt_session_writer.append_sample(
             session_ts_utc=session_ts_utc,
@@ -1725,37 +1885,13 @@ def get_env_latest(uid: Optional[str] = None):
                 "error": f"Unknown env node uid: {selected_uid}",
             }, status_code=404)
 
-    try:
-        reading = get_env_reading(selected_uid)
-        env_daily_accumulator.update(reading)
-        averages_uid = reading.get("uid") or selected_uid
-        return JSONResponse({
-            "latest": reading,
-            "averages": env_daily_accumulator.current_averages(averages_uid),
-        })
-    except Exception as e:
-        return JSONResponse({
-            "latest": env_daily_accumulator.latest(selected_uid),
-            "averages": env_daily_accumulator.current_averages(selected_uid),
-            "error": str(e),
-        })
+    return JSONResponse(env_response_for_uid(selected_uid))
 
 @app.get("/env/all")
 def get_env_all():
     nodes: Dict[str, Dict[str, Any]] = {}
-    readings = get_all_env_readings()
     for uid in env_drivers:
-        reading = readings.get(uid)
-        if reading is not None:
-            env_daily_accumulator.update(reading)
-            averages_uid = reading.get("uid") or uid
-        else:
-            reading = env_daily_accumulator.latest(uid)
-            averages_uid = uid
-        nodes[uid] = {
-            "latest": reading,
-            "averages": env_daily_accumulator.current_averages(averages_uid),
-        }
+        nodes[uid] = env_response_for_uid(uid)
     return JSONResponse({"nodes": nodes})
 
 @app.get("/gt/session-data")
