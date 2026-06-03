@@ -864,26 +864,35 @@ def dashboard():
                 --grid: #333;
             }}
 
-            body {{ font-family: system-ui; padding: 30px; max-width: 1600px; margin: 0 auto; background: var(--bg); color: var(--text); }}
+            * {{ box-sizing: border-box; }}
+            html {{ width: 100%; overflow-x: hidden; }}
+            body {{ width: 100%; min-width: 0; margin: 0; overflow-x: hidden; font-family: system-ui; background: var(--bg); color: var(--text); }}
+            img, canvas {{ max-width: 100%; }}
+            .dashboard-shell {{ width: 100%; max-width: 1280px; margin: 0 auto; padding: 24px 20px 40px; overflow-x: hidden; }}
+            .dashboard-shell > * {{ min-width: 0; }}
             h1 {{ margin-bottom: 30px; color: var(--text); }}
             h3, h4, label, .graph-title {{ color: var(--text); }}
 
-            .header-row {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:30px; }}
-            .header-left {{ display:flex; align-items:center; gap:20px; }}
+            .header-row {{ display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:30px; min-width:0; }}
+            .header-left {{ display:flex; align-items:center; gap:20px; min-width:0; }}
+            .header-left img {{ flex:0 0 auto; height:60px; width:auto; }}
             .header-title {{ margin:0; font-size:28px; line-height:1; color:var(--text); }}
             .header-clock {{ font-size:18px; line-height:1; color:rgba(255,255,255,0.85); white-space:nowrap; }}
 
             .controls-row {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; margin-bottom: 40px; }}
             @media (max-width: 900px) {{ .controls-row {{ grid-template-columns: 1fr; }} }}
 
-            .gt-card {{ padding: 20px; border: 1px solid var(--panel-border); border-radius: 10px; background: var(--panel); margin-bottom: 30px; }}
-            .gt-card-inner {{ display: grid; grid-template-columns: 320px 1fr 1fr; gap: 30px; }}
+            .gt-card {{ min-width:0; padding: 20px; border: 1px solid var(--panel-border); border-radius: 10px; background: var(--panel); margin-bottom: 30px; overflow:hidden; }}
+            .gt-card-inner {{ display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 18px; align-items:start; min-width:0; }}
+            .gt-settings-card {{ min-width:0; }}
+            .gt-graphs-grid {{ display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:16px; min-width:0; }}
             @media (max-width: 1100px) {{ .gt-card-inner {{ grid-template-columns: 1fr; }} }}
+            @media (max-width: 900px) {{ .gt-graphs-grid {{ grid-template-columns: 1fr; }} }}
 
             label {{ display:block; margin-top: 12px; font-weight: 600; }}
             input {{ font-size: 16px; padding: 8px; width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--panel-border); border-radius: 6px; }}
-            .card {{ padding: 20px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--panel); box-shadow: none; }}
-            button {{ font-size: 18px; padding: 10px 16px; margin-right: 10px; cursor: pointer; background: var(--accent); color: white; border: none; border-radius: 6px; }}
+            .card {{ min-width:0; padding: 20px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--panel); box-shadow: none; overflow:hidden; }}
+            button {{ font-size: 18px; padding: 10px 16px; margin: 0 10px 10px 0; cursor: pointer; background: var(--accent); color: white; border: none; border-radius: 6px; }}
             button:hover {{ background: var(--accent-hover); }}
             button:disabled {{ opacity: 0.5; cursor: not-allowed; }}
             .muted {{ color: var(--muted); }}
@@ -891,16 +900,18 @@ def dashboard():
             .ok {{ color: var(--ok); font-weight: 700; }}
             .bad {{ color: var(--bad); font-weight: 700; }}
 
-            .graph-card {{ padding: 20px; border: 1px solid var(--panel-border); border-radius: 10px; background: var(--panel); }}
-            .graph-title {{ font-size: 18px; font-weight: 700; margin-bottom: 15px; }}
-            .graph-container {{ position: relative; height: 400px; margin-bottom: 15px; }}
+            .graph-card {{ min-width:0; max-width:100%; padding: 16px; border: 1px solid var(--panel-border); border-radius: 8px; background: #0b0b0b; overflow:hidden; }}
+            .graph-title {{ font-size: 18px; font-weight: 700; margin-bottom: 12px; }}
+            .graph-reading {{ font-size: 26px; font-weight: 700; color: var(--accent); margin-bottom: 12px; }}
+            .graph-container {{ position: relative; width:100%; max-width:100%; height: clamp(240px, 30vw, 340px); margin-bottom: 12px; overflow:hidden; }}
+            .graph-container canvas {{ display:block; width:100% !important; max-width:100% !important; height:100% !important; }}
 
             .threshold-status {{ display: inline-block; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; margin-top: 10px; }}
             .threshold-status.safe {{ background: var(--safe-bg); color: var(--safe-text); }}
             .threshold-status.exceeded {{ background: var(--exceeded-bg); color: var(--exceeded-text); }}
 
-            .env-nodes-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(270px, 320px)); gap:16px; justify-content:start; }}
-            .env-node-card {{ width:100%; max-width:320px; border:1px solid var(--panel-border); border-radius:8px; padding:14px; background:#0b0b0b; }}
+            .env-nodes-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 420px)); gap:16px; justify-content:start; min-width:0; }}
+            .env-node-card {{ width:100%; max-width:420px; min-width:0; border:1px solid var(--panel-border); border-radius:8px; padding:14px; background:#0b0b0b; overflow:hidden; }}
             .env-node-card.error {{ border-color: var(--bad); }}
             .env-node-head {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }}
             .env-node-title {{ font-size:16px; font-weight:750; color:var(--text); line-height:1.2; }}
@@ -909,16 +920,31 @@ def dashboard():
             .env-status {{ flex:0 0 auto; border-radius:999px; border:1px solid currentColor; padding:4px 8px; font-size:12px; font-weight:800; line-height:1; color:var(--ok); }}
             .env-status.error {{ color:var(--bad); }}
             .env-node-note {{ margin-top:12px; color:var(--muted); font-size:12px; line-height:1.35; }}
-            .env-grid {{ display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; }}
+            .env-grid {{ display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:10px; min-width:0; }}
             .env-metric {{ min-width:0; border:1px solid var(--panel-border); border-radius:8px; padding:10px; background:var(--panel); }}
             .env-value {{ min-height:27px; overflow-wrap:anywhere; font-size:24px; font-weight:750; line-height:1.1; }}
-            @media (max-width: 700px) {{ .env-nodes-grid {{ grid-template-columns: minmax(0, 1fr); }} .env-node-card {{ max-width:none; }} .env-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+            @media (max-width: 900px) {{ .env-grid {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} }}
+            @media (max-width: 700px) {{
+              .dashboard-shell {{ padding: 18px 14px 28px; }}
+              .header-row {{ align-items:flex-start; }}
+              .header-left img {{ height:44px; }}
+              .header-title {{ font-size:22px; line-height:1.1; }}
+              .header-clock {{ font-size:14px; }}
+              .gt-card {{ padding:14px; }}
+              .graph-card {{ padding:14px; }}
+              .graph-container {{ height:260px; }}
+              .env-nodes-grid {{ grid-template-columns: minmax(0, 1fr); }}
+              .env-node-card {{ max-width:none; }}
+              .env-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+            }}
+            @media (max-width: 380px) {{ .env-grid {{ grid-template-columns: 1fr; }} }}
         </style>
     </head>
     <body>
+      <main class="dashboard-shell">
         <div class="header-row">
           <div class="header-left">
-            <img src="/static/Bard-Web-Logos/bard-logo-red.png" style="height:60px;"/>
+            <img src="/static/Bard-Web-Logos/bard-logo-red.png"/>
             <h1 class="header-title">Gravitational-wave Optics Lab Environmental Monitor</h1>
           </div>
           <div style="text-align:right;">
@@ -931,7 +957,7 @@ def dashboard():
           <h3 style="margin-top:0; margin-bottom:20px;">GT-521S Particle Counter</h3>
           <div class="gt-card-inner">
 
-            <div>
+            <div class="gt-settings-card">
               <h4 style="margin-top:0;">Run settings</h4>
 
               <label>Sample Time (seconds)</label>
@@ -974,26 +1000,28 @@ def dashboard():
               <div id="run-diagnostics" class="small muted" style="margin-top:6px;"></div>
             </div>
 
-            <div>
-              <div class="graph-title">0.3µm Particles</div>
-              <div style="font-size: 28px; font-weight: 700; color: var(--accent); margin-bottom: 15px;">
-                <span id="current_c03">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
+            <div class="gt-graphs-grid">
+              <div class="graph-card">
+                <div class="graph-title">0.3µm Particles</div>
+                <div class="graph-reading">
+                  <span id="current_c03">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
+                </div>
+                <div class="graph-container">
+                  <canvas id="chart-c03"></canvas>
+                </div>
+                <div id="status-c03" class="threshold-status safe">✓ Below Threshold</div>
               </div>
-              <div class="graph-container">
-                <canvas id="chart-c03"></canvas>
-              </div>
-              <div id="status-c03" class="threshold-status safe">✓ Below Threshold</div>
-            </div>
 
-            <div>
-              <div class="graph-title">5.0µm Particles</div>
-              <div style="font-size: 28px; font-weight: 700; color: var(--accent); margin-bottom: 15px;">
-                <span id="current_c50">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
+              <div class="graph-card">
+                <div class="graph-title">5.0µm Particles</div>
+                <div class="graph-reading">
+                  <span id="current_c50">—</span> <span style="font-size: 16px; color: var(--muted);">/m³</span>
+                </div>
+                <div class="graph-container">
+                  <canvas id="chart-c50"></canvas>
+                </div>
+                <div id="status-c50" class="threshold-status safe">✓ Below Threshold</div>
               </div>
-              <div class="graph-container">
-                <canvas id="chart-c50"></canvas>
-              </div>
-              <div id="status-c50" class="threshold-status safe">✓ Below Threshold</div>
             </div>
 
           </div>
@@ -1057,6 +1085,7 @@ def dashboard():
           <div id="session-target-status" class="small muted"></div>
           <div id="export-status" class="small muted" style="margin-top:6px;"></div>
         </div>
+      </main>
 
         <script>
             let chartC03 = null;
