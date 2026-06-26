@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GoLab Dashboard</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        background: #f4f4f4;
+        display: flex;
+        justify-content: center;
+        padding: 60px 20px;
+      }
+
+      .container {
+        width: 100%;
+        max-width: 700px;
+      }
+
+      .header {
+        text-align: left;
+        margin-bottom: 20px;
+      }
+
+      .header img {
+        max-width: 220px;
+      }
+
+      .card {
+        background: white;
+        padding: 30px;
+        border-radius: 14px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      }
+
+      .title {
+        font-size: 20px;
+        color: #666;
+        margin-bottom: 10px;
+      }
+
+      .big {
+        font-size: 64px;
+        font-weight: 700;
+        margin: 10px 0;
+      }
+
+      .muted {
+        color: #777;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      
+      <div class="header">
+        <img src="/static/Bard-Web-Logos/bard-college-logo-red.png">
+      </div>
+
+      <div class="card">
+        <div class="title">GoLab Dashboard</div>
+        <div class="big" id="temp">—</div>
+        <div class="muted">Outdoor temperature (Rhinebeck)</div>
+        <div class="muted" id="time">—</div>
+      </div>
+
+    </div>
+
+    <script>
+      const tempEl = document.getElementById("temp");
+      const timeEl = document.getElementById("time");
+
+      const ws = new WebSocket(`ws://${location.host}/ws`);
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.temperature !== null) {
+          tempEl.textContent = `${data.temperature} °C`;
+        }
+      };
+
+      function tick() {
+        timeEl.textContent = new Date().toLocaleString();
+      }
+
+      tick();
+      setInterval(tick, 1000);
+    </script>
+  </body>
+</html>

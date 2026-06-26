@@ -1,0 +1,13 @@
+[Unit]
+Description=GoLab Monitor Google Drive backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/golab-backup
+WorkingDirectory=/home/golab/golab-monitor
+ExecStart=/usr/bin/env bash /home/golab/golab-monitor/scripts/backup_to_drive.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
