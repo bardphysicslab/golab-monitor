@@ -1,8 +1,8 @@
 import asyncio
+import csv
 import json
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -39,6 +39,11 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast?latitude=41.93&longitud
 
 GT_UID = "bb-0002"
 ENV1_UID = "bb-0001"
+GT_STORAGE_UID = "bb-golab-gt521-001"
+ENV_STORAGE_UIDS = {
+    "bb-0001": "bb-golab-env-001",
+    "bb-0003": "bb-golab-env-002",
+}
 
 ENV_NODES = [
     {
@@ -63,16 +68,42 @@ DEFAULT_SAMPLES = 480
 ENV_NODE_STALE_AFTER_S = float(os.environ.get("GOLAB_ENV_NODE_STALE_AFTER_S", "30"))
 
 DATA_DIR = Path.home() / "golab-monitor" / "data"
-GT_SESSIONS_DIR = DATA_DIR / "sessions"
-ENV_DAILY_AVERAGES_PATH = DATA_DIR / "env_daily_averages.jsonl"
-MEDIA_BASE_DIR = Path("/media/golab")
+GT521_DATA_DIR = DATA_DIR / "gt521" / GT_STORAGE_UID
+GT_SESSIONS_DIR = GT521_DATA_DIR / "sessions"
+ENV_DATA_DIR = DATA_DIR / "env"
+BACKUP_STATUS_PATH = Path(os.environ.get("GOLAB_BACKUP_STATUS", "/var/lib/golab-backup/status.json"))
+BACKUP_REMOTE = os.environ.get("GOLAB_BACKUP_REMOTE", "bardbox")
+BACKUP_REMOTE_ROOT = os.environ.get("GOLAB_BACKUP_REMOTE_ROOT", "sensor_data/golab-monitor")
+BACKUP_DESTINATION = f"{BACKUP_REMOTE}:{BACKUP_REMOTE_ROOT.strip('/')}"
+BACKUP_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "backup_to_drive.sh"
 
 # Unit conversions for UI only
 FT3_TO_M3 = 35.3147
 PMS_0P1L_TO_M3 = 10000
 
+def gtFt3ToM3(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return round(float(value) * FT3_TO_M3)
+    except (TypeError, ValueError):
+        return None
+
+def pmsCountToM3(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value) * PMS_0P1L_TO_M3
+    except (TypeError, ValueError):
+        return None
+
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+@app.on_event("startup")
+def startup_storage_and_backup() -> None:
+    ensure_data_dirs()
+    launch_startup_backup()
 
 _TIME_STATUS_CACHE: dict | None = None
 _TIME_STATUS_CACHE_TS: float = 0.0
@@ -160,9 +191,74 @@ def time_metadata(status: Optional[Dict[str, Any]] = None, utc: Optional[str] = 
         "sane": status["sane"],
     }
 
+ENV_DAILY_CSV_FIELDS = [
+    "date_local",
+    "generated_at_utc",
+    "node_uid",
+    "samples",
+    "temp_c_avg",
+    "rh_pct_avg",
+    "press_pa_avg",
+    "pm1_std_avg",
+    "pm25_std_avg",
+    "pm10_std_avg",
+    "pm1_env_avg",
+    "pm25_env_avg",
+    "pm10_env_avg",
+    "c03_avg_m3",
+    "c05_avg_m3",
+    "c10_avg_m3",
+    "c25_avg_m3",
+    "c50_avg_m3",
+    "c100_avg_m3",
+    "status",
+]
+
+GT_SESSION_CSV_FIELDS = [
+    "timestamp_utc",
+    "session_id",
+    "device_uid",
+    "c03",
+    "c50",
+    "c03_m3",
+    "c50_m3",
+    "exceeded_c03",
+    "exceeded_c50",
+    "env1_temp_c",
+    "env1_rh_pct",
+    "env1_press_pa",
+    "env1_c03_m3",
+    "env1_c05_m3",
+    "env1_c10_m3",
+    "env2_temp_c",
+    "env2_rh_pct",
+    "env2_press_pa",
+    "env2_c03_m3",
+    "env2_c05_m3",
+    "env2_c10_m3",
+    "time_source",
+    "ntp_synced",
+]
+
+def storage_env_uid(uid: str) -> str:
+    return ENV_STORAGE_UIDS.get(uid, uid)
+
+def env_daily_csv_path(uid: str, date_local: Optional[str] = None) -> Path:
+    return ENV_DATA_DIR / storage_env_uid(uid) / f"{date_local or local_date_str()}.csv"
+
+def ensure_csv_header(path: Path, fieldnames: List[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size > 0:
+        return
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        csv.DictWriter(handle, fieldnames=fieldnames).writeheader()
+
 def ensure_data_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     GT_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    ENV_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for node in ENV_NODES:
+        ensure_csv_header(env_daily_csv_path(str(node["uid"])), ENV_DAILY_CSV_FIELDS)
 
 def append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
     ensure_data_dirs()
@@ -324,30 +420,51 @@ def local_date_str(dt: Optional[datetime] = None) -> str:
     return dt.astimezone().date().isoformat()
 
 def safe_timestamp_for_filename(ts_utc: str) -> str:
-    return ts_utc.replace(":", "-")
+    return ts_utc.replace("T", "_").replace(":", "-").replace("Z", "")
 
-def get_storage_targets() -> List[Dict[str, str]]:
-    if not MEDIA_BASE_DIR.exists():
-        return []
-    out = []
-    for p in sorted(MEDIA_BASE_DIR.iterdir()):
-        if p.is_dir() and os.access(p, os.W_OK):
-            out.append({"name": p.name, "path": str(p)})
-    return out
-
-def get_storage_target(path: str) -> Optional[Dict[str, str]]:
+def get_backup_status() -> Dict[str, Any]:
+    status = {
+        "destination": BACKUP_DESTINATION,
+        "local_data_root": str(DATA_DIR),
+        "status": "unknown",
+        "last_attempt": None,
+        "last_success": None,
+        "last_error": None,
+        "files_uploaded": None,
+    }
     try:
-        requested = Path(path).resolve()
+        if BACKUP_STATUS_PATH.exists():
+            with BACKUP_STATUS_PATH.open("r", encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict):
+                status.update(loaded)
     except Exception:
-        return None
-    for target in get_storage_targets():
-        if Path(target["path"]).resolve() == requested:
-            return target
-    return None
+        log.exception("Could not read backup status")
+        status["status"] = "error"
+        status["last_error"] = f"Could not read {BACKUP_STATUS_PATH}"
+    status["destination"] = BACKUP_DESTINATION
+    status["local_data_root"] = str(DATA_DIR)
+    return status
+
+def launch_backup(args: Optional[List[str]] = None) -> None:
+    if not BACKUP_SCRIPT_PATH.exists():
+        log.warning("Backup script not found: %s", BACKUP_SCRIPT_PATH)
+        return
+    cmd = ["bash", str(BACKUP_SCRIPT_PATH), *(args or [])]
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log.info("Backup launched: %s", " ".join(cmd))
+    except Exception:
+        log.exception("Could not launch backup")
+
+def launch_startup_backup() -> None:
+    launch_backup(["--reason", "startup"])
+
+def launch_gt_session_backup(path: Path) -> None:
+    launch_backup(["--file", str(path), "gt521/bb-golab-gt521-001/sessions", "--reason", "gt_session_complete"])
 
 class EnvDailyAccumulator:
-    def __init__(self, output_path: Path):
-        self.output_path = output_path
+    def __init__(self):
         self.lock = threading.Lock()
         self._nodes: Dict[str, Dict[str, Any]] = {}
 
@@ -382,6 +499,7 @@ class EnvDailyAccumulator:
                 node["counts"][key] = node["counts"].get(key, 0) + 1
             node["samples"] += 1
             node["last_timestamp"] = reading_ts
+            self._write_summary_locked(uid, node)
 
     def latest(self, uid: Optional[str] = None) -> Optional[Dict[str, Any]]:
         uid = uid or configured_env_uid() or ENV1_UID
@@ -396,9 +514,10 @@ class EnvDailyAccumulator:
         key_map = {
             "temp_c_avg": "temp_c",
             "rh_pct_avg": "rh_pct",
-            "c03_avg": "c03",
-            "c05_avg": "c05",
-            "c10_avg": "c10",
+            "press_pa_avg": "press_pa",
+            "c03_avg_m3": "c03",
+            "c05_avg_m3": "c05",
+            "c10_avg_m3": "c10",
         }
         with self.lock:
             node = self._nodes.get(uid)
@@ -428,9 +547,19 @@ class EnvDailyAccumulator:
         for source_key, avg_key in (
             ("temp_c", "temp_c_avg"),
             ("rh_pct", "rh_pct_avg"),
-            ("c03", "c03_avg"),
-            ("c05", "c05_avg"),
-            ("c10", "c10_avg"),
+            ("press_pa", "press_pa_avg"),
+            ("pm1_std", "pm1_std_avg"),
+            ("pm25_std", "pm25_std_avg"),
+            ("pm10_std", "pm10_std_avg"),
+            ("pm1_env", "pm1_env_avg"),
+            ("pm25_env", "pm25_env_avg"),
+            ("pm10_env", "pm10_env_avg"),
+            ("c03", "c03_avg_m3"),
+            ("c05", "c05_avg_m3"),
+            ("c10", "c10_avg_m3"),
+            ("c25", "c25_avg_m3"),
+            ("c50", "c50_avg_m3"),
+            ("c100", "c100_avg_m3"),
         ):
             value = data.get(source_key)
             if value is None:
@@ -443,23 +572,27 @@ class EnvDailyAccumulator:
         if node["samples"] <= 0:
             return
 
-        averaged = {}
+        averaged: Dict[str, float] = {}
         for key, total in node["sums"].items():
             count = node["counts"].get(key, 0)
             if count:
                 averaged[key] = total / count
 
         latest = node.get("latest") or {}
-        append_jsonl(self.output_path, {
+        path = env_daily_csv_path(uid, node["date_local"])
+        ensure_csv_header(path, ENV_DAILY_CSV_FIELDS)
+        row = {
             "date_local": node["date_local"],
             "generated_at_utc": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "uid": uid,
-            "status": latest.get("status", "unknown"),
+            "node_uid": storage_env_uid(uid),
             "samples": node["samples"],
-            "data": averaged,
-            "extended": {},
-            "raw": None,
-        })
+            "status": latest.get("status", "unknown"),
+        }
+        row.update(averaged)
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=ENV_DAILY_CSV_FIELDS)
+            writer.writeheader()
+            writer.writerow({key: row.get(key, "") for key in ENV_DAILY_CSV_FIELDS})
 
 
 class GTSessionWriter:
@@ -467,25 +600,30 @@ class GTSessionWriter:
         self.sessions_dir = sessions_dir
         self.lock = threading.Lock()
         self.active_path: Optional[Path] = None
+        self.active_session_id: Optional[str] = None
 
-    def start(self, start_utc: str, sessions_dir: Optional[Path] = None) -> Path:
+    def start(self, start_utc: str, session_id: str, sessions_dir: Optional[Path] = None) -> Path:
         ensure_data_dirs()
         if sessions_dir is not None:
             sessions_dir.mkdir(parents=True, exist_ok=True)
         safe_ts = safe_timestamp_for_filename(start_utc)
         target_dir = sessions_dir or self.sessions_dir
-        path = target_dir / f"gt_session_{safe_ts}.jsonl"
+        path = target_dir / f"gt_session_{safe_ts}.csv"
         with self.lock:
             self.active_path = path
-        path.touch(exist_ok=True)
+            self.active_session_id = session_id
+        ensure_csv_header(path, GT_SESSION_CSV_FIELDS)
         log.info("GT: session writer started — path=%s", path)
         return path
 
-    def stop(self) -> None:
+    def stop(self) -> Optional[Path]:
         with self.lock:
+            path = self.active_path
             if self.active_path is not None:
                 log.info("GT: session writer stopped — path=%s", self.active_path)
             self.active_path = None
+            self.active_session_id = None
+            return path
 
     def append_sample(
         self,
@@ -496,6 +634,7 @@ class GTSessionWriter:
     ) -> None:
         with self.lock:
             path = self.active_path
+            session_id = self.active_session_id
             if path is None:
                 log.warning("GT: append_sample skipped because session writer has no active path")
                 return
@@ -505,70 +644,53 @@ class GTSessionWriter:
                 for uid, reading in env_readings.items():
                     devices[env_device_key(uid)] = reading
 
-            append_jsonl(path, {
-                "session_ts_utc": session_ts_utc,
-                "time": time_info,
-                "devices": devices,
-            })
+            gt_data = gt_reading or {}
+            row: Dict[str, Any] = {
+                "timestamp_utc": session_ts_utc,
+                "session_id": session_id,
+                "device_uid": GT_STORAGE_UID,
+                "c03": gt_data.get("c03"),
+                "c50": gt_data.get("c50"),
+                "c03_m3": gtFt3ToM3(gt_data.get("c03")),
+                "c50_m3": gtFt3ToM3(gt_data.get("c50")),
+                "exceeded_c03": gt_data.get("exceeded_c03"),
+                "exceeded_c50": gt_data.get("exceeded_c50"),
+                "time_source": time_info.get("source"),
+                "ntp_synced": time_info.get("ntp_synced"),
+            }
+            for key, reading in devices.items():
+                if not key.startswith("env"):
+                    continue
+                env_data = (reading or {}).get("data") or {}
+                env_extended = (reading or {}).get("extended") or {}
+                row[f"{key}_temp_c"] = env_data.get("temp_c")
+                row[f"{key}_rh_pct"] = env_extended.get("rh_pct")
+                row[f"{key}_press_pa"] = env_extended.get("press_pa") or env_data.get("press_pa")
+                row[f"{key}_c03_m3"] = pmsCountToM3(env_data.get("c03"))
+                row[f"{key}_c05_m3"] = pmsCountToM3(env_extended.get("c05"))
+                row[f"{key}_c10_m3"] = pmsCountToM3(env_extended.get("c10"))
+            with path.open("a", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=GT_SESSION_CSV_FIELDS)
+                writer.writerow({key: row.get(key, "") for key in GT_SESSION_CSV_FIELDS})
             log.info("GT: appended session sample — path=%s ts=%s", path, session_ts_utc)
 
 
 ensure_data_dirs()
-env_daily_accumulator = EnvDailyAccumulator(ENV_DAILY_AVERAGES_PATH)
+env_daily_accumulator = EnvDailyAccumulator()
 gt_session_writer = GTSessionWriter(GT_SESSIONS_DIR)
 
-session_save_lock = threading.Lock()
-session_save_mode = "local"
-session_save_root = GT_SESSIONS_DIR
-session_save_display = "Local"
-session_save_mount: Optional[Path] = None
-
 def get_current_session_target() -> Dict[str, str]:
-    with session_save_lock:
-        selectable_path = str(session_save_mount) if session_save_mount is not None else str(session_save_root)
-        return {
-            "mode": session_save_mode,
-            "path": selectable_path,
-            "resolved_path": str(session_save_root),
-            "label": session_save_display,
-        }
-
-def set_session_target_local() -> Dict[str, str]:
-    global session_save_mode, session_save_root, session_save_display, session_save_mount
     ensure_data_dirs()
-    with session_save_lock:
-        session_save_mode = "local"
-        session_save_root = GT_SESSIONS_DIR
-        session_save_display = "Local"
-        session_save_mount = None
-    return get_current_session_target()
-
-def set_session_target_usb(target: Dict[str, str]) -> Dict[str, str]:
-    global session_save_mode, session_save_root, session_save_display, session_save_mount
-    mount = Path(target["path"])
-    root = mount / "golab-monitor" / "sessions"
-    root.mkdir(parents=True, exist_ok=True)
-    with session_save_lock:
-        session_save_mode = "usb"
-        session_save_root = root
-        session_save_display = target["name"]
-        session_save_mount = mount
-    return get_current_session_target()
+    return {
+        "mode": "local",
+        "path": str(GT_SESSIONS_DIR),
+        "resolved_path": str(GT_SESSIONS_DIR),
+        "label": "Local",
+    }
 
 def resolve_current_session_dir() -> tuple[Optional[Path], Optional[str]]:
-    with session_save_lock:
-        mode = session_save_mode
-        root = session_save_root
-        mount = session_save_mount
-    if mode == "local":
-        ensure_data_dirs()
-        return root, None
-    if mode == "usb" and mount is not None:
-        if get_storage_target(str(mount)) is None:
-            return None, "Selected USB session target is no longer mounted or writable."
-        root.mkdir(parents=True, exist_ok=True)
-        return root, None
-    return None, "Session save target is invalid."
+    ensure_data_dirs()
+    return GT_SESSIONS_DIR, None
 
 # =========================
 # CLEANROOM STANDARDS
@@ -604,13 +726,6 @@ class RunSettings(BaseModel):
     samples: int = Field(default=DEFAULT_SAMPLES, ge=1, le=999)
 
 current_settings = RunSettings()
-
-class SessionTargetRequest(BaseModel):
-    mode: str
-    path: Optional[str] = None
-
-class ExportDailyRequest(BaseModel):
-    path: str
 
 # =========================
 # SESSION DATA
@@ -772,9 +887,11 @@ def finalize_gt_session_from_state(state: Dict[str, Any]) -> None:
         state.get("received_samples"),
         state.get("target_samples"),
     )
-    gt_session_writer.stop()
+    completed_session_path = gt_session_writer.stop()
     if reason == "completed":
         session_manager.complete()
+        if completed_session_path is not None:
+            launch_gt_session_backup(completed_session_path)
     elif reason in GT_ERROR_END_REASONS:
         session_manager.error(reason)
     elif reason == "manual_stop":
@@ -1072,18 +1189,17 @@ def dashboard():
         </div>
 
         <div class="card" style="margin-top: 20px;">
-          <h3>Data & Export</h3>
-          <div class="small muted" style="margin-bottom:12px;">Current Session Target: <span id="session-target-current">Local</span></div>
-          <div style="max-width:720px;">
-            <label style="margin-top:0;">File Target</label>
-            <select id="file-target-select" onchange="applyFileTarget()" style="font-size:16px;padding:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--panel-border);border-radius:6px;"></select>
-            <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:18px; margin-bottom:12px;">
-              <button id="export-daily-button" onclick="exportDailyAverages()">Export Daily Averages</button>
-              <button onclick="loadStorageTargets()">Refresh Drives</button>
-            </div>
+          <h3>Backup</h3>
+          <div class="small muted" style="margin-bottom:12px;">Local Data Root: <span id="backup-local-root">/home/golab/golab-monitor/data</span></div>
+          <div class="small muted" style="margin-bottom:12px;">Session files are always written locally. Google Drive is a redundant backup only.</div>
+          <div class="env-grid" style="max-width:920px;">
+            <div class="env-metric"><div class="small muted">Destination</div><div id="backup-destination" class="env-value" style="font-size:16px;">—</div></div>
+            <div class="env-metric"><div class="small muted">Status</div><div id="backup-status" class="env-value" style="font-size:20px;">—</div></div>
+            <div class="env-metric"><div class="small muted">Last Attempt</div><div id="backup-last-attempt" class="env-value" style="font-size:16px;">—</div></div>
+            <div class="env-metric"><div class="small muted">Last Success</div><div id="backup-last-success" class="env-value" style="font-size:16px;">—</div></div>
+            <div class="env-metric"><div class="small muted">Files Uploaded</div><div id="backup-files-uploaded" class="env-value" style="font-size:20px;">—</div></div>
+            <div class="env-metric"><div class="small muted">Last Error</div><div id="backup-last-error" class="env-value" style="font-size:16px;">—</div></div>
           </div>
-          <div id="session-target-status" class="small muted"></div>
-          <div id="export-status" class="small muted" style="margin-top:6px;"></div>
         </div>
       </main>
 
@@ -1094,8 +1210,6 @@ def dashboard():
             let wasRunning = false;
             let runBusy = false;
             let settingsInitialized = false;
-            let storageTargets = [];
-
             const FT3_TO_M3 = {FT3_TO_M3};
             const PMS_0P1L_TO_M3 = {PMS_0P1L_TO_M3};
 
@@ -1115,7 +1229,8 @@ def dashboard():
 
             function setText(id, value) {{
               const el = document.getElementById(id);
-              if (el) el.textContent = value;
+              if (!el) return;
+              el.textContent = value === null || value === undefined || value === "" ? "—" : String(value);
             }}
 
             function formatTimestamp(value) {{
@@ -1469,115 +1584,15 @@ def dashboard():
               }}
             }}
 
-            function setStorageStatus(id, text, ok = true) {{
-              const el = document.getElementById(id);
-              if (!el) return;
-              el.className = ok ? "small ok" : "small bad";
-              el.textContent = text;
-            }}
-
-            function optionExists(selectEl, value) {{
-              return Array.from(selectEl.options).some(opt => opt.value === value);
-            }}
-
-            function populateStorageTargets(payload) {{
-              storageTargets = payload.targets || [];
-              const fileSelect = document.getElementById("file-target-select");
-              const currentEl = document.getElementById("session-target-current");
-              if (!fileSelect) return;
-
-              const previousValue = fileSelect.value;
-
-              fileSelect.innerHTML = "";
-              const localOption = document.createElement("option");
-              localOption.value = "__local__";
-              localOption.textContent = "Local — /home/golab/golab-monitor/data/sessions";
-              fileSelect.appendChild(localOption);
-
-              storageTargets.forEach(target => {{
-                const option = document.createElement("option");
-                option.value = target.path;
-                option.textContent = `${{target.name}} — ${{target.path}}`;
-                fileSelect.appendChild(option);
-              }});
-
-              const current = payload.current || {{ mode: "local", label: "Local", path: "" }};
-              const currentValue = current.mode === "usb" ? current.path : "__local__";
-              if (optionExists(fileSelect, previousValue)) {{
-                fileSelect.value = previousValue;
-              }} else if (optionExists(fileSelect, currentValue)) {{
-                fileSelect.value = currentValue;
-              }} else {{
-                fileSelect.value = "__local__";
-              }}
-
-              if (currentEl) currentEl.textContent = `${{current.label}} (${{current.resolved_path || current.path}})`;
-              const exportButton = document.getElementById("export-daily-button");
-              if (exportButton) exportButton.disabled = storageTargets.length === 0;
-              if (storageTargets.length === 0) {{
-                setStorageStatus("export-status", "No mounted USB targets found under /media/golab.", false);
-              }}
-            }}
-
-            async function loadStorageTargets() {{
-              try {{
-                const r = await fetch("/storage/targets");
-                const j = await r.json();
-                populateStorageTargets(j);
-                setStorageStatus("session-target-status", "Drive list refreshed.");
-              }} catch (e) {{
-                setStorageStatus("session-target-status", "Could not refresh drive list.", false);
-              }}
-            }}
-
-            async function applyFileTarget() {{
-              const fileEl = document.getElementById("file-target-select");
-              if (!fileEl) return;
-              const payload = fileEl.value === "__local__"
-                ? {{ mode: "local" }}
-                : {{ mode: "usb", path: fileEl.value }};
-
-              try {{
-                const r = await fetch("/storage/session-target", {{
-                  method: "POST",
-                  headers: {{ "Content-Type": "application/json" }},
-                  body: JSON.stringify(payload),
-                }});
-                const j = await r.json();
-                if (!r.ok || !j.ok) {{
-                  setStorageStatus("session-target-status", j.error || `Target update failed (HTTP ${{r.status}})`, false);
-                  return;
-                }}
-                const currentEl = document.getElementById("session-target-current");
-                if (currentEl) currentEl.textContent = `${{j.current.label}} (${{j.current.resolved_path || j.current.path}})`;
-                setStorageStatus("session-target-status", `Session target set to ${{j.current.label}}.`);
-              }} catch (e) {{
-                setStorageStatus("session-target-status", "Session target update failed.", false);
-              }}
-            }}
-
-            async function exportDailyAverages() {{
-              const selectEl = document.getElementById("file-target-select");
-              if (!selectEl || !selectEl.value || selectEl.value === "__local__") {{
-                setStorageStatus("export-status", "Choose a mounted USB target first.", false);
-                return;
-              }}
-
-              try {{
-                const r = await fetch("/export/env-daily", {{
-                  method: "POST",
-                  headers: {{ "Content-Type": "application/json" }},
-                  body: JSON.stringify({{ path: selectEl.value }}),
-                }});
-                const j = await r.json();
-                if (!r.ok || !j.ok) {{
-                  setStorageStatus("export-status", j.error || `Export failed (HTTP ${{r.status}})`, false);
-                  return;
-                }}
-                setStorageStatus("export-status", `Exported to ${{j.destination}}.`);
-              }} catch (e) {{
-                setStorageStatus("export-status", "Daily averages export failed.", false);
-              }}
+            function updateBackupStatus(backup) {{
+              if (!backup) return;
+              setText("backup-local-root", backup.local_data_root);
+              setText("backup-destination", backup.destination);
+              setText("backup-status", backup.status);
+              setText("backup-last-attempt", backup.last_attempt);
+              setText("backup-last-success", backup.last_success);
+              setText("backup-files-uploaded", backup.files_uploaded);
+              setText("backup-last-error", backup.last_error);
             }}
 
             async function pollState() {{
@@ -1592,15 +1607,7 @@ def dashboard():
                   settingsInitialized = true;
                 }}
 
-                const currentTargetEl = document.getElementById("session-target-current");
-                const sessionTarget = j.storage?.session_save;
-                if (currentTargetEl && sessionTarget) {{
-                  currentTargetEl.textContent = `${{sessionTarget.label}} (${{sessionTarget.resolved_path || sessionTarget.path}})`;
-                }}
-                const fileSelect = document.getElementById("file-target-select");
-                if (fileSelect) {{
-                  fileSelect.disabled = !!j.run_active || !!j.gt_starting;
-                }}
+                updateBackupStatus(j.backup);
                 const startBtn = document.getElementById("start-button");
                 runBusy = !!j.run_active || !!j.gt_starting;
                 if (startBtn) startBtn.disabled = runBusy;
@@ -1703,7 +1710,6 @@ def dashboard():
             setInterval(pollLatest, 1000);
             setInterval(pollEnv, 1000);
             setInterval(pollState, 2000);
-            loadStorageTargets();
             pollState();
             pollLatest();
 
@@ -1846,7 +1852,11 @@ def start(settings: RunSettings):
         gt_session_writer.append_sample(
             session_ts_utc=session_ts_utc,
             time_info=time_metadata(sample_time_status, utc=session_ts_utc),
-            gt_reading=gt.get_reading(),
+            gt_reading={
+                **parsed,
+                "exceeded_c03": exceeded_c03,
+                "exceeded_c50": exceeded_c50,
+            },
             env_readings=env_readings,
         )
         log.info("GT: on_sample completed — ts=%s", session_ts_utc)
@@ -1864,7 +1874,7 @@ def start(settings: RunSettings):
     set_gt_starting(True)
     try:
         session_id = session_manager.start(metadata=settings_dict)
-        session_path = gt_session_writer.start(applied_at, sessions_dir=session_dir)
+        session_path = gt_session_writer.start(applied_at, session_id=session_id, sessions_dir=session_dir)
         log.info("GT: calling driver start_session — id=%s settings=%s", session_id, settings_dict)
         result = gt.start_session(settings_dict, on_sample=on_sample)
         log.info("GT: driver start_session returned — id=%s result=%s state=%s", session_id, result, gt.get_state())
@@ -1981,58 +1991,6 @@ def status():
     finalize_gt_session_from_state(state)
     return JSONResponse(state)
 
-@app.get("/storage/targets")
-def storage_targets():
-    return JSONResponse({
-        "current": get_current_session_target(),
-        "targets": get_storage_targets(),
-    })
-
-@app.post("/storage/session-target")
-def set_storage_session_target(req: SessionTargetRequest):
-    if gt.get_state().get("run_active"):
-        return JSONResponse({
-            "ok": False,
-            "error": "Cannot change session save target while a run is active.",
-        }, status_code=409)
-
-    if req.mode == "local":
-        current = set_session_target_local()
-        return JSONResponse({"ok": True, "current": current})
-
-    if req.mode == "usb":
-        if not req.path:
-            return JSONResponse({"ok": False, "error": "USB target path is required."}, status_code=400)
-        target = get_storage_target(req.path)
-        if target is None:
-            return JSONResponse({"ok": False, "error": "USB target is not mounted or writable."}, status_code=400)
-        current = set_session_target_usb(target)
-        return JSONResponse({"ok": True, "current": current})
-
-    return JSONResponse({"ok": False, "error": "Unknown session target mode."}, status_code=400)
-
-@app.post("/export/env-daily")
-def export_env_daily(req: ExportDailyRequest):
-    target = get_storage_target(req.path)
-    if target is None:
-        return JSONResponse({"ok": False, "error": "USB target is not mounted or writable."}, status_code=400)
-    if not ENV_DAILY_AVERAGES_PATH.exists():
-        return JSONResponse({
-            "ok": False,
-            "error": f"Daily averages file not found: {ENV_DAILY_AVERAGES_PATH}",
-        }, status_code=404)
-
-    export_dir = Path(target["path"]) / "golab-monitor" / "exports"
-    export_dir.mkdir(parents=True, exist_ok=True)
-    stamp = utc_now().astimezone().strftime("%Y-%m-%d_%H%M")
-    dest = export_dir / f"env_daily_averages_export_{stamp}.jsonl"
-    shutil.copy2(ENV_DAILY_AVERAGES_PATH, dest)
-    return JSONResponse({
-        "ok": True,
-        "destination": str(dest),
-        "filename": dest.name,
-    })
-
 @app.get("/state")
 def get_state():
     with thresholds_lock:
@@ -2051,6 +2009,7 @@ def get_state():
         "storage": {
             "session_save": get_current_session_target(),
         },
+        "backup": get_backup_status(),
         "time": {
             "utc": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "valid": status["valid"],

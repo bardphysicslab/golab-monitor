@@ -1,0 +1,11 @@
+[Unit]
+Description=Run GoLab Monitor Google Drive backup daily
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=24h
+Persistent=true
+Unit=golab-backup.service
+
+[Install]
+WantedBy=timers.target
