@@ -1,6 +1,11 @@
 __pycache__/
 *.pyc
 *.pyo
+*.log
 venv/
 main.py.save
 .DS_Store
+data/
+backups/
+.config/rclone/
+rclone.conf

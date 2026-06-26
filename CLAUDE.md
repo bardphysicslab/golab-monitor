@@ -34,3 +34,24 @@ journalctl -u labdash -f
 - `arduino/` — Arduino sensor node firmware and protocol docs
 - `venv/` — Python virtual environment (not committed)
 - `CLAUDE.md` — this file
+
+## BardBox governance
+
+GoLab is a working BardBox project repo. The canonical standards live in
+`bardbox`; the reusable reference implementation lives in
+`bardbox-project-template`.
+
+BardBox standards are living standards. When a platform-level improvement is
+made here, update:
+
+1. This GoLab repo.
+2. `bardbox-project-template`.
+3. `bardbox-project-template/docs/BARDBOX_STANDARDS.md`.
+
+If the change alters the BardBox platform/framework standard, update `bardbox`
+as well.
+
+Follow BardBox dashboard and stale-data rules unless the user explicitly says
+they are changing the standard: never show stale readings as live, use clear
+offline/stale states, preserve current entrypoint conventions for this project,
+and keep reusable layout fixes synchronized back to the template.
