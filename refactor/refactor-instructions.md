@@ -87,7 +87,7 @@ Implement the refactor in this order:
 - Implement GT521SDriver class with get_info(), get_capabilities(), get_reading()
 - Preserve ALL existing serial handshake logic from gt521s_control.py exactly
 - get_info() returns:
-  - uid: passed via config or constructor (a default of "bb-0001" is allowed temporarily)
+  - uid: passed via config or constructor
   - source_type: "gt521s"
   - transport: "serial"
   - protocol: "vendor"

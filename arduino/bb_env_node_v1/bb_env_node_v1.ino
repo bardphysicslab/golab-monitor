@@ -3,7 +3,7 @@
 #include "Adafruit_PM25AQI.h"
 #include <SoftwareSerial.h>
 
-#define DEVICE_UID "bb-0001"
+#define DEVICE_UID "bb-golab-air-001"
 #define FW_VERSION "1.0"
 
 #define PMS_RX 2

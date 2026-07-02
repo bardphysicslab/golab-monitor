@@ -5,7 +5,7 @@ Bard Box driver for the Arduino Bard Box serial protocol v1 sensor node.
 Supports devices with PMS5003 + BME280 (or similar) reporting over USB serial.
 
 Bard Box protocol v1 messages:
-  OK INFO uid=bb-0001 fw=1.0 sensors=PMS,BME280
+  OK INFO uid=bb-golab-air-001 fw=1.0 sensors=PMS,BME280
   HDR,v1,sample_idx,temp_c,rh_pct,press_pa,pm1_std,pm25_std,pm10_std,pm1_env,pm25_env,pm10_env,c03,c05,c10,c25,c50,c100
   DAT,1,26.43,9.96,102873,1,1,1,1,1,1,294,92,7,0,0,0
 
@@ -244,7 +244,7 @@ class BardboxEnvNodeV1Driver:
         raise RuntimeError("BardboxEnvNode: timed out waiting for OK INFO response")
 
     def _parse_info_line(self, line: str) -> None:
-        """Parse: OK INFO uid=bb-0001 fw=1.0 sensors=PMS,BME280"""
+        """Parse: OK INFO uid=bb-golab-air-001 fw=1.0 sensors=PMS,BME280"""
         parts = line.split()
         kv = {}
         for part in parts[2:]:  # skip "OK INFO"

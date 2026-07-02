@@ -99,11 +99,11 @@ class WebNodeDriver:
 
         for attempt in range(1, retries + 1):
             reading = self._poll()
-            if reading.get("status") == "ok":
+            if not reading.get("error"):
                 return
             if attempt < retries and retry_delay > 0:
                 time.sleep(retry_delay)
-        log.warning("WebNode: initial poll did not produce ok reading uid=%s error=%s", self.source_uid, self._last_error)
+        log.warning("WebNode: initial poll did not produce usable reading uid=%s error=%s", self.source_uid, self._last_error)
 
     def get_info(self) -> Dict[str, Any]:
         return {
@@ -152,21 +152,21 @@ class WebNodeDriver:
             payload = self._fetch_payload()
             node = self._find_node(payload)
             if node is None:
-                return self._set_unavailable(f"UID not found: {self.source_uid}", "node_unavailable")
+                return self._set_unavailable(f"UID not found: {self.source_uid}", "offline")
 
             channel = self._pms_channel(node)
             if not isinstance(channel, dict):
-                return self._set_unavailable(f"PMS channel not found: {self.pms_sensor}", "node_unavailable", node)
+                return self._set_unavailable(f"PMS channel not found: {self.pms_sensor}", "error", node)
 
             reading = self._normalize_node(node, channel)
             self._latest = reading
             self._latest_fetch_monotonic = time.monotonic()
-            self._last_error = None if reading.get("status") == "ok" else reading.get("error")
+            self._last_error = reading.get("error")
             return dict(reading)
         except httpx.TimeoutException as exc:
-            return self._set_unavailable(f"timeout fetching BardBox dashboard API: {exc}", "node_unavailable")
+            return self._set_unavailable(f"timeout fetching BardBox dashboard API: {exc}", "offline")
         except httpx.HTTPError as exc:
-            return self._set_unavailable(f"server failure fetching BardBox dashboard API: {exc}", "node_unavailable")
+            return self._set_unavailable(f"server failure fetching BardBox dashboard API: {exc}", "offline")
         except (TypeError, ValueError) as exc:
             return self._set_unavailable(f"bad dashboard payload: {exc}", "error")
 
@@ -229,19 +229,10 @@ class WebNodeDriver:
     def _normalize_node(self, node: Dict[str, Any], channel: Dict[str, Any]) -> Dict[str, Any]:
         source_ts = self._first_value(node, "timestamp", "updated_at", "last_seen")
         timestamp = source_ts if isinstance(source_ts, str) and source_ts else self._now_iso()
-        age_seconds = self._numeric(self._first_value(node, "age_seconds"))
-        stale_after_s = self._numeric(self._first_value(node, "stale_after_s")) or self.stale_after_s
-        node_status = str(self._first_value(node, "status") or "ok")
-        is_stale = self._first_value(node, "is_stale")
-
-        stale = bool(is_stale) or (age_seconds is not None and stale_after_s is not None and age_seconds > stale_after_s)
-        if node_status not in {"ok", "live"}:
-            return self._unavailable("Node unavailable", "node_unavailable", node, timestamp)
-        if stale:
-            return self._unavailable("Node unavailable", "node_unavailable", node, timestamp)
+        node_status = str(self._first_value(node, "status") or "live")
         valid_key = f"{self.pms_sensor}_valid"
         if valid_key in channel and channel.get(valid_key) is not True:
-            return self._unavailable(f"PMS channel not valid: {self.pms_sensor}", "node_unavailable", node, timestamp)
+            return self._unavailable(f"PMS channel not valid: {self.pms_sensor}", "error", node, timestamp)
 
         data = {
             "temp_c": self._numeric(self._first_value(node, "temp_c")),
@@ -273,7 +264,7 @@ class WebNodeDriver:
         return {
             "uid": self.source_uid,
             "timestamp": timestamp,
-            "status": "ok",
+            "status": node_status,
             "data": data,
             "extended": extended,
             "raw": self._bounded_raw(node),
@@ -338,7 +329,7 @@ class WebNodeDriver:
     def _unavailable(
         self,
         message: str,
-        status: str = "node_unavailable",
+        status: str = "offline",
         node: Optional[Dict[str, Any]] = None,
         timestamp: Optional[str] = None,
     ) -> Dict[str, Any]:

@@ -69,7 +69,7 @@ The Arduino device is already flashed and connected to the Pi over serial.
 The device outputs Bard Box serial protocol lines like:
 
 ```
-OK INFO uid=bb-0001 fw=1.0 sensors=PMS,BME280
+OK INFO uid=bb-golab-air-001 fw=1.0 sensors=PMS,BME280
 HDR,v1,sample_idx,temp_c,rh_pct,press_pa,pm1_std,pm25_std,pm10_std,pm1_env,pm25_env,pm10_env,c03,c05,c10,c25,c50,c100
 DAT,1,26.43,9.96,102873,1,1,1,1,1,1,294,92,7,0,0,0
 ```
@@ -199,7 +199,7 @@ Connection sequence must be:
 
 ```json
 {
-    "uid": "bb-0001",
+    "uid": "bb-golab-air-001",
     "source_type": "bardbox_env_node_v1",
     "transport": "serial",
     "protocol": "bardbox",
@@ -229,7 +229,7 @@ Connection sequence must be:
 
 ```json
 {
-    "uid": "bb-0001",
+    "uid": "bb-golab-air-001",
     "timestamp": "2026-04-08T15:20:00Z",
     "status": "ok",
     "data": {

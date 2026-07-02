@@ -76,13 +76,13 @@ class WebNodeDriverTests(unittest.TestCase):
             "nodes": [
                 {
                     "uid": "other-node",
-                    "status": "ok",
+                    "status": "live",
                     "pms": {"pms_a": {"c03": 999}},
                 },
                 {
                     "uid": "GoLab-air-001",
                     "timestamp": "2026-07-02T12:00:00Z",
-                    "status": "ok",
+                    "status": "live",
                     "temp_c": 22.4,
                     "humidity_percent": 45.6,
                     "pressure_hpa": 1013.2,
@@ -116,7 +116,7 @@ class WebNodeDriverTests(unittest.TestCase):
         reading = driver._normalize_node(node, channel)
 
         self.assertEqual(reading["uid"], "GoLab-air-001")
-        self.assertEqual(reading["status"], "ok")
+        self.assertEqual(reading["status"], "live")
         self.assertEqual(reading["data"]["c03"], 7)
         self.assertEqual(reading["data"]["pm25_std"], 2)
         self.assertEqual(reading["extended"]["rh_pct"], 45.6)
@@ -169,7 +169,7 @@ class WebNodeDriverTests(unittest.TestCase):
         channel = driver._pms_channel(node)
         reading = driver._normalize_node(node, channel)
 
-        self.assertEqual(reading["status"], "ok")
+        self.assertEqual(reading["status"], "live")
         self.assertEqual(reading["data"]["temp_c"], 24.64)
         self.assertEqual(reading["data"]["pm25_std"], 5)
         self.assertEqual(reading["data"]["c03"], 358)
@@ -184,7 +184,7 @@ class WebNodeDriverTests(unittest.TestCase):
         driver._fetch_payload = lambda: {"nodes": [{"uid": "other-node"}]}
         reading = driver.get_reading()
 
-        self.assertEqual(reading["status"], "node_unavailable")
+        self.assertEqual(reading["status"], "offline")
         self.assertIn("UID not found", reading["error"])
         self.assertTrue(all(value is None for value in reading["data"].values()))
 
