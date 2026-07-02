@@ -38,12 +38,8 @@ BAUD = 9600
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast?latitude=41.93&longitude=-73.91&current_weather=true"
 
 GT_UID = "bb-0002"
-ENV1_UID = "bb-0001"
 GT_STORAGE_UID = "bb-golab-gt521-001"
 ENV_STORAGE_UIDS = {
-    "bb-0001": "bb-golab-env-001",
-    "bb-0003": "bb-golab-env-002",
-    "GoLab-air-001": "bb-golab-air-001",
     "bb-golab-air-001": "bb-golab-air-001",
     "bb-golab-air-002": "bb-golab-air-002",
 }
@@ -298,22 +294,6 @@ def normalize_env_reading(uid: str, reading: Optional[Dict[str, Any]]) -> Option
         out["uid"] = uid
     return out
 
-def parse_utc_timestamp(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
-        return None
-
-def env_reading_age_s(reading: Dict[str, Any]) -> Optional[float]:
-    parsed = parse_utc_timestamp(reading.get("timestamp"))
-    if parsed is None:
-        return None
-    return max(0.0, (utc_now() - parsed).total_seconds())
-
 def env_last_seen(reading: Optional[Dict[str, Any]]) -> Optional[str]:
     if not reading:
         return None
@@ -324,11 +304,12 @@ def env_unavailable_reading(
     uid: str,
     message: str = "Node unavailable",
     last_seen: Optional[str] = None,
+    status: str = "offline",
 ) -> Dict[str, Any]:
     return {
         "uid": uid,
         "timestamp": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "status": "node_unavailable",
+        "status": status,
         "data": {
             "temp_c": None,
             "pm1_std": None,
@@ -356,18 +337,6 @@ def env_unavailable_reading(
         "error": message,
     }
 
-def env_freshness_error(reading: Dict[str, Any]) -> Optional[str]:
-    status = reading.get("status")
-    if status != "ok":
-        return "No node found" if status == "error" else "Node unavailable"
-
-    age_s = env_reading_age_s(reading)
-    if age_s is None:
-        return "Node unavailable"
-    if age_s > ENV_NODE_STALE_AFTER_S:
-        return "Node unavailable"
-    return None
-
 def env_response_for_uid(uid: str) -> Dict[str, Any]:
     try:
         reading = get_env_reading(uid)
@@ -385,17 +354,8 @@ def env_response_for_uid(uid: str) -> Dict[str, Any]:
             "error": str(exc),
         }
 
-    freshness_error = env_freshness_error(reading)
-    if freshness_error:
-        last_seen = env_last_seen(reading)
-        return {
-            "latest": env_unavailable_reading(uid, freshness_error, last_seen),
-            "averages": env_daily_accumulator.current_averages(uid),
-            "last_seen": last_seen,
-            "error": freshness_error,
-        }
-
-    env_daily_accumulator.update(reading)
+    if not reading.get("error") and any(value is not None for value in (reading.get("data") or {}).values()):
+        env_daily_accumulator.update(reading)
     averages_uid = reading.get("uid") or uid
     return {
         "latest": reading,
@@ -968,6 +928,13 @@ def dashboard():
     iso_defaults = CLEANROOM_STANDARDS.get("iso_14644_1", {}).get("ISO_3", {})
     default_c03 = iso_defaults.get("0.3", 1000)
     default_c50 = iso_defaults.get("5.0", 500)
+    env_node_config_json = json.dumps([
+        {
+            "uid": str(node["uid"]),
+            "label": str(node.get("label") or node["uid"]),
+        }
+        for node in ENV_NODES
+    ])
     return f"""
     <html>
     <head>
@@ -1156,46 +1123,7 @@ def dashboard():
 
         <div class="card" style="margin-top: 20px;">
           <h3>Environmental Nodes</h3>
-          <div class="env-nodes-grid">
-            <div class="env-node-card">
-              <div class="env-node-head">
-                <div>
-                  <div class="env-node-title">Env Node 1</div>
-                  <div class="env-node-subtitle">Environmental monitor</div>
-                  <div class="env-node-uid">UID bb-0001</div>
-                </div>
-                <div id="env_bb_0001_status" class="env-status">OK</div>
-              </div>
-              <div class="env-grid">
-                <div class="env-metric"><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0001_c03" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0001_c05" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">&gt;1.0µm /m³</div><div id="env_bb_0001_c10" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">Temp (°C)</div><div id="env_bb_0001_temp" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">RH (%)</div><div id="env_bb_0001_rh" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">Pressure (Pa)</div><div id="env_bb_0001_press" class="env-value">—</div></div>
-              </div>
-              <div id="env_bb_0001_note" class="env-node-note">Waiting for live reading.</div>
-            </div>
-            <div class="env-node-card">
-              <div class="env-node-head">
-                <div>
-                  <div class="env-node-title">Env Node 2</div>
-                  <div class="env-node-subtitle">Environmental monitor</div>
-                  <div class="env-node-uid">UID bb-0003</div>
-                </div>
-                <div id="env_bb_0003_status" class="env-status">OK</div>
-              </div>
-              <div class="env-grid">
-                <div class="env-metric"><div class="small muted">&gt;0.3µm /m³</div><div id="env_bb_0003_c03" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">&gt;0.5µm /m³</div><div id="env_bb_0003_c05" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">&gt;1.0µm /m³</div><div id="env_bb_0003_c10" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">Temp (°C)</div><div id="env_bb_0003_temp" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">RH (%)</div><div id="env_bb_0003_rh" class="env-value">—</div></div>
-                <div class="env-metric"><div class="small muted">Pressure (Pa)</div><div id="env_bb_0003_press" class="env-value">—</div></div>
-              </div>
-              <div id="env_bb_0003_note" class="env-node-note">Waiting for live reading.</div>
-            </div>
-          </div>
+          <div id="env-nodes-grid" class="env-nodes-grid"></div>
         </div>
 
         <div class="card" style="margin-top: 20px;">
@@ -1220,6 +1148,7 @@ def dashboard():
             let wasRunning = false;
             let runBusy = false;
             let settingsInitialized = false;
+            const ENV_NODES = {env_node_config_json};
             const FT3_TO_M3 = {FT3_TO_M3};
             const PMS_0P1L_TO_M3 = {PMS_0P1L_TO_M3};
 
@@ -1243,6 +1172,10 @@ def dashboard():
               el.textContent = value === null || value === undefined || value === "" ? "—" : String(value);
             }}
 
+            function envPrefix(uid) {{
+              return `env_${{String(uid).replace(/[^a-zA-Z0-9]+/g, "_")}}`;
+            }}
+
             function formatTimestamp(value) {{
               if (!value) return "—";
               const parsed = new Date(value);
@@ -1250,12 +1183,14 @@ def dashboard():
               return parsed.toLocaleTimeString([], {{ hour: "2-digit", minute: "2-digit", second: "2-digit" }});
             }}
 
-            function setEnvNodeStatus(prefix, ok, message, lastSeen) {{
+            function setEnvNodeStatus(prefix, status, message, lastSeen, hasData) {{
               const statusEl = document.getElementById(`${{prefix}}_status`);
               const noteEl = document.getElementById(`${{prefix}}_note`);
               const panel = statusEl?.closest(".env-node-card");
+              const displayStatus = status || "offline";
+              const ok = hasData && !["offline", "error"].includes(displayStatus);
               if (statusEl) {{
-                statusEl.textContent = ok ? "OK" : "ERROR";
+                statusEl.textContent = displayStatus.toUpperCase();
                 statusEl.classList.toggle("error", !ok);
               }}
               panel?.classList.toggle("error", !ok);
@@ -1271,7 +1206,7 @@ def dashboard():
                 setText(`${{prefix}}_${{metric}}`, "—");
                 setText(`${{prefix}}_${{metric}}_avg`, "Avg: —");
               }});
-              setEnvNodeStatus(prefix, false, "Node unavailable", null);
+              setEnvNodeStatus(prefix, "offline", "Node unavailable", null, false);
             }}
 
             function updateEnvNode(uid, prefix, node) {{
@@ -1282,15 +1217,15 @@ def dashboard():
                 return;
               }}
 
-              const isAvailable = latest.status === "ok";
+              const d = latest.data || {{}};
+              const hasData = Object.values(d).some(value => value !== null && value !== undefined);
               const lastSeen = node?.last_seen || latest.extended?.last_seen || latest.timestamp;
-              if (!isAvailable) {{
+              if (!hasData) {{
                 resetEnvNode(prefix);
-                setEnvNodeStatus(prefix, false, latest.extended?.message || latest.error || "Node unavailable", lastSeen);
+                setEnvNodeStatus(prefix, latest.status, latest.extended?.message || latest.error || "Node unavailable", lastSeen, false);
                 return;
               }}
 
-              const d = latest.data || {{}};
               const x = latest.extended || {{}};
               setText(`${{prefix}}_c03`, (pmsCountToM3(d.c03) ?? "—").toString());
               setText(`${{prefix}}_c05`, (pmsCountToM3(x.c05) ?? "—").toString());
@@ -1304,7 +1239,39 @@ def dashboard():
               setText(`${{prefix}}_c10_avg`, avgText(pmsCountToM3(avg.c10)));
               setText(`${{prefix}}_temp_avg`, avgText(avg.temp_c));
               setText(`${{prefix}}_rh_avg`, avgText(avg.rh_pct));
-              setEnvNodeStatus(prefix, true, "OK", lastSeen);
+              setEnvNodeStatus(prefix, latest.status, latest.extended?.message || latest.error, lastSeen, true);
+            }}
+
+            function renderEnvNodes(nodesByUid = {{}}) {{
+              const grid = document.getElementById("env-nodes-grid");
+              if (!grid) return;
+              const configs = ENV_NODES.map(config => nodesByUid[config.uid]?.config || config);
+              grid.innerHTML = configs.map(config => {{
+                const uid = config.uid;
+                const prefix = envPrefix(uid);
+                const label = config.label || uid;
+                return `
+                  <div class="env-node-card" data-env-uid="${{uid}}">
+                    <div class="env-node-head">
+                      <div>
+                        <div class="env-node-title">${{label}}</div>
+                        <div class="env-node-subtitle">Environmental monitor</div>
+                        <div class="env-node-uid">UID ${{uid}}</div>
+                      </div>
+                      <div id="${{prefix}}_status" class="env-status">OFFLINE</div>
+                    </div>
+                    <div class="env-grid">
+                      <div class="env-metric"><div class="small muted">&gt;0.3µm /m³</div><div id="${{prefix}}_c03" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="small muted">&gt;0.5µm /m³</div><div id="${{prefix}}_c05" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="small muted">&gt;1.0µm /m³</div><div id="${{prefix}}_c10" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="small muted">Temp (°C)</div><div id="${{prefix}}_temp" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="small muted">RH (%)</div><div id="${{prefix}}_rh" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="small muted">Pressure (Pa)</div><div id="${{prefix}}_press" class="env-value">—</div></div>
+                    </div>
+                    <div id="${{prefix}}_note" class="env-node-note">Waiting for live reading.</div>
+                  </div>
+                `;
+              }}).join("");
             }}
 
             function initializeCharts() {{
@@ -1418,11 +1385,14 @@ def dashboard():
                 const r = await fetch("/env/all");
                 const j = await r.json();
                 const nodes = j?.nodes || {{}};
-                updateEnvNode("bb-0001", "env_bb_0001", nodes["bb-0001"]);
-                updateEnvNode("bb-0003", "env_bb_0003", nodes["bb-0003"]);
+                renderEnvNodes(nodes);
+                ENV_NODES.forEach(config => {{
+                  const uid = config.uid;
+                  updateEnvNode(uid, envPrefix(uid), nodes[uid]);
+                }});
               }} catch (e) {{
-                resetEnvNode("env_bb_0001");
-                resetEnvNode("env_bb_0003");
+                renderEnvNodes();
+                ENV_NODES.forEach(config => resetEnvNode(envPrefix(config.uid)));
               }}
             }}
 
@@ -1717,11 +1687,13 @@ def dashboard():
             }});
             
             applyPreset("ISO_3");
+            renderEnvNodes();
             setInterval(pollLatest, 1000);
             setInterval(pollEnv, 1000);
             setInterval(pollState, 2000);
             pollState();
             pollLatest();
+            pollEnv();
 
             async function updateHeaderClock() {{
               const clockEl = document.getElementById("header-clock");
@@ -1849,14 +1821,7 @@ def start(settings: RunSettings):
                 )
                 continue
 
-            freshness_error = env_freshness_error(env_reading)
-            if freshness_error:
-                env_readings[uid] = env_unavailable_reading(
-                    uid,
-                    freshness_error,
-                    env_last_seen(env_reading),
-                )
-            else:
+            if not env_reading.get("error") and any(value is not None for value in (env_reading.get("data") or {}).values()):
                 env_daily_accumulator.update(env_reading)
 
         gt_session_writer.append_sample(
@@ -1941,7 +1906,7 @@ def get_latest():
 
 @app.get("/env/latest")
 def get_env_latest(uid: Optional[str] = None):
-    selected_uid = uid or configured_env_uid() or ENV1_UID
+    selected_uid = uid or configured_env_uid()
     if selected_uid not in env_drivers:
         first_uid = configured_env_uid()
         if uid is None and first_uid:
@@ -1958,8 +1923,14 @@ def get_env_latest(uid: Optional[str] = None):
 @app.get("/env/all")
 def get_env_all():
     nodes: Dict[str, Dict[str, Any]] = {}
-    for uid in env_drivers:
-        nodes[uid] = env_response_for_uid(uid)
+    for uid, entry in env_drivers.items():
+        node = env_response_for_uid(uid)
+        config = entry.get("config") or {}
+        node["config"] = {
+            "uid": uid,
+            "label": str(config.get("label") or uid),
+        }
+        nodes[uid] = node
     return JSONResponse({"nodes": nodes})
 
 @app.get("/gt/session-data")

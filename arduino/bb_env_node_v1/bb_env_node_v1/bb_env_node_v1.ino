@@ -2,7 +2,7 @@
 #include <Adafruit_BME280.h>
 #include "Adafruit_PM25AQI.h"
 
-#define DEVICE_UID "bb-0003"
+#define DEVICE_UID "bb-golab-air-002"
 #define FW_VERSION "1.3"
 
 static const unsigned long SAMPLE_INTERVAL_MS = 2000;
