@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from drivers.gt521s_driver import GT521SDriver
-from drivers.bardbox_env_node_v1_driver import SensorDriver as EnvDriver
+from drivers.env_driver_factory import build_environment_driver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,20 +43,29 @@ GT_STORAGE_UID = "bb-golab-gt521-001"
 ENV_STORAGE_UIDS = {
     "bb-0001": "bb-golab-env-001",
     "bb-0003": "bb-golab-env-002",
+    "GoLab-air-001": "bb-golab-air-001",
+    "bb-golab-air-001": "bb-golab-air-001",
+    "bb-golab-air-002": "bb-golab-air-002",
 }
 
 ENV_NODES = [
     {
-        "uid": "bb-0001",
-        "label": "Env Node 1",
-        "port": "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_03536383236351C09231-if00",
-        "baud": 115200,
+        "uid": "bb-golab-air-001",
+        "label": "GoLab Air 1",
+        "driver": "web_node",
+        "server_url": "https://bard-box.org",
+        "source_uid": "bb-golab-air-001",
+        "pms_sensor": "pms_a",
+        "poll_interval_s": 5,
     },
     {
-        "uid": "bb-0003",
-        "label": "Env Node 2",
-        "port": "/dev/serial/by-id/usb-Adafruit_Feather_ESP32-S3_No_PSRAM_b4:3a:45:33:bd:a4-if00",
-        "baud": 115200,
+        "uid": "bb-golab-air-002",
+        "label": "GoLab Air 2",
+        "driver": "web_node",
+        "server_url": "https://bard-box.org",
+        "source_uid": "bb-golab-air-002",
+        "pms_sensor": "pms_a",
+        "poll_interval_s": 5,
     },
 ]
 
@@ -930,7 +939,8 @@ time.sleep(3.0)  # let GT settle before opening Arduino port
 
 for node in ENV_NODES:
     uid = str(node["uid"])
-    driver = EnvDriver(port=str(node["port"]), baud=int(node["baud"]))
+    driver_type = str(node.get("driver", "serial_env_node"))
+    driver = build_environment_driver(node, ENV_NODE_STALE_AFTER_S)
     env_drivers[uid] = {
         "config": node,
         "driver": driver,
@@ -939,11 +949,11 @@ for node in ENV_NODES:
         driver.connect()
         info = driver.get_info()
         if info.get("uid") and info.get("uid") != "unknown":
-            log.info("ENV: connected uid=%s label=%s port=%s", info.get("uid"), node["label"], node["port"])
+            log.info("ENV: connected uid=%s label=%s driver=%s", info.get("uid"), node["label"], driver_type)
         else:
-            log.warning("ENV: not connected yet uid=%s label=%s port=%s", uid, node["label"], node["port"])
+            log.warning("ENV: not connected yet uid=%s label=%s driver=%s", uid, node["label"], driver_type)
     except Exception:
-        log.exception("ENV: failed to connect uid=%s label=%s port=%s", uid, node["label"], node["port"])
+        log.exception("ENV: failed to connect uid=%s label=%s driver=%s", uid, node["label"], driver_type)
 
 gt_monitor_thread = threading.Thread(target=monitor_gt_session_state, daemon=True)
 gt_monitor_thread.start()
