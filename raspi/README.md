@@ -4,13 +4,16 @@ FastAPI-based dashboard and data collection service running on the GoLab Raspber
 
 ## What it does
 - Reads particle counts from a GT-521S sensor over serial (USB-UART via CP2102)
+- Reads BardBox/CESH Air web-node environmental particle readings over HTTP
 - Serves a live web dashboard at `http://10.60.10.59:8000`
 - Exposes REST endpoints for starting/stopping runs, querying live readings, and shared state
 - Streams outdoor temperature from Open-Meteo via WebSocket
 
 ## Structure
 - `main.py` — single-file FastAPI app (entry point: `main:app`)
-- `gt521s_control.py` — GT-521S serial control utilities
+- `drivers/gt521s_driver.py` — GT-521S serial particle counter driver
+- `drivers/bardbox_env_node_v1_driver.py` — serial BardBox environmental node driver
+- `drivers/web_node_driver.py` — BardBox dashboard API web-node driver
 - `static/` — static assets (logos, HTML)
 
 ## Running
@@ -125,6 +128,43 @@ If Drive or the network is unavailable, local monitoring continues normally.
 The failed attempt is logged to `/var/log/golab-backup.log`, backup status is
 written to `/var/lib/golab-backup/status.json`, and the next timer run retries
 automatically.
+
+## BardBox Web Nodes
+
+Environmental particle sources can come from BardBox/CESH Air web nodes without
+changing the GT-521S serial run workflow. `main.py` uses the same environmental
+driver contract for serial and HTTP nodes: `connect()`, `get_info()`,
+`get_capabilities()`, `get_reading()`, and `stop()`.
+
+Default web-node configuration:
+
+```python
+ENV_NODES = [
+    {
+        "uid": "bb-golab-air-001",
+        "label": "GoLab Air 1",
+        "driver": "web_node",
+        "server_url": "https://bard-box.org",
+        "source_uid": "bb-golab-air-001",
+        "pms_sensor": "pms_a",
+        "poll_interval_s": 5,
+    },
+    {
+        "uid": "bb-golab-air-002",
+        "label": "GoLab Air 2",
+        "driver": "web_node",
+        "server_url": "https://bard-box.org",
+        "source_uid": "bb-golab-air-002",
+        "pms_sensor": "pms_a",
+        "poll_interval_s": 5,
+    },
+]
+```
+
+For temporary testing, `source_uid` may be set to `GoLab-air-001`. To switch an
+environmental source back to the serial BardBox node driver, remove
+`driver: "web_node"` and configure `port` plus `baud` as before. The GT-521S
+particle counter is unchanged and continues to use `GT521SDriver`.
 
 ## Hardware
 - Raspberry Pi (hostname: `golab-pi`, IP: `10.60.10.59`)
