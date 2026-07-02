@@ -1004,20 +1004,29 @@ def dashboard():
             .threshold-status.safe {{ background: var(--safe-bg); color: var(--safe-text); }}
             .threshold-status.exceeded {{ background: var(--exceeded-bg); color: var(--exceeded-text); }}
 
-            .env-nodes-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 420px)); gap:16px; justify-content:start; min-width:0; }}
-            .env-node-card {{ width:100%; max-width:420px; min-width:0; border:1px solid var(--panel-border); border-radius:8px; padding:14px; background:#0b0b0b; overflow:hidden; }}
+            .env-nodes-grid {{ display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items:start; gap:14px; min-width:0; }}
+            .env-node-card {{ min-width:0; border:1px solid var(--panel-border); border-radius:8px; padding:16px; background:#0b0b0b; overflow:hidden; }}
             .env-node-card.error {{ border-color: var(--bad); }}
-            .env-node-head {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }}
-            .env-node-title {{ font-size:16px; font-weight:750; color:var(--text); line-height:1.2; }}
+            .env-node-head {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:0; }}
+            .env-node-title-block {{ min-width:0; }}
+            .env-node-title {{ overflow-wrap:anywhere; font-size:17px; font-weight:700; color:var(--text); line-height:1.2; }}
             .env-node-subtitle {{ margin-top:3px; color:var(--muted); font-size:12px; line-height:1.3; }}
-            .env-node-uid {{ margin-top:4px; color:var(--muted); font-size:12px; line-height:1.3; }}
+            .env-node-uid {{ margin-top:3px; color:var(--muted); font-size:12px; font-weight:700; line-height:1.3; }}
             .env-status {{ flex:0 0 auto; border-radius:999px; border:1px solid currentColor; padding:4px 8px; font-size:12px; font-weight:800; line-height:1; color:var(--ok); }}
+            .env-status.catchup {{ color:var(--warn); }}
+            .env-status.offline,
             .env-status.error {{ color:var(--bad); }}
-            .env-node-note {{ margin-top:12px; color:var(--muted); font-size:12px; line-height:1.35; }}
+            .env-node-note {{ margin-top:10px; color:var(--muted); font-size:12px; line-height:1.3; }}
             .env-grid {{ display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:10px; min-width:0; }}
             .env-metric {{ min-width:0; border:1px solid var(--panel-border); border-radius:8px; padding:10px; background:var(--panel); }}
             .env-value {{ min-height:27px; overflow-wrap:anywhere; font-size:24px; font-weight:750; line-height:1.1; }}
+            .env-node-card .env-grid {{ grid-template-columns: repeat(3, minmax(0, 1fr)); gap:8px; margin-top:12px; }}
+            .env-node-card .env-metric {{ padding:7px 8px; }}
+            .env-node-card .env-metric-label {{ margin-bottom:5px; color:var(--muted); font-size:11px; line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+            .env-node-card .env-value {{ min-height:20px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:18px; font-weight:750; line-height:1.1; font-variant-numeric: tabular-nums; letter-spacing:0; }}
             @media (max-width: 900px) {{ .env-grid {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} }}
+            @media (max-width: 980px) {{ .env-nodes-grid {{ grid-template-columns: minmax(0, 1fr); }} }}
+            @media (max-width: 760px) {{ .env-node-card .env-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
             @media (max-width: 700px) {{
               .dashboard-shell {{ padding: 18px 14px 28px; }}
               .header-row {{ align-items:flex-start; }}
@@ -1028,10 +1037,9 @@ def dashboard():
               .graph-card {{ padding:14px; }}
               .graph-container {{ height:260px; }}
               .env-nodes-grid {{ grid-template-columns: minmax(0, 1fr); }}
-              .env-node-card {{ max-width:none; }}
               .env-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
             }}
-            @media (max-width: 380px) {{ .env-grid {{ grid-template-columns: 1fr; }} }}
+            @media (max-width: 380px) {{ .env-node-card .env-grid {{ grid-template-columns: 1fr; }} }}
         </style>
     </head>
     <body>
@@ -1192,6 +1200,8 @@ def dashboard():
               if (statusEl) {{
                 statusEl.textContent = displayStatus.toUpperCase();
                 statusEl.classList.toggle("error", !ok);
+                statusEl.classList.toggle("offline", displayStatus === "offline");
+                statusEl.classList.toggle("catchup", displayStatus === "catchup");
               }}
               panel?.classList.toggle("error", !ok);
               if (noteEl) {{
@@ -1253,7 +1263,7 @@ def dashboard():
                 return `
                   <div class="env-node-card" data-env-uid="${{uid}}">
                     <div class="env-node-head">
-                      <div>
+                      <div class="env-node-title-block">
                         <div class="env-node-title">${{label}}</div>
                         <div class="env-node-subtitle">Environmental monitor</div>
                         <div class="env-node-uid">UID ${{uid}}</div>
@@ -1261,12 +1271,12 @@ def dashboard():
                       <div id="${{prefix}}_status" class="env-status">OFFLINE</div>
                     </div>
                     <div class="env-grid">
-                      <div class="env-metric"><div class="small muted">&gt;0.3µm /m³</div><div id="${{prefix}}_c03" class="env-value">—</div></div>
-                      <div class="env-metric"><div class="small muted">&gt;0.5µm /m³</div><div id="${{prefix}}_c05" class="env-value">—</div></div>
-                      <div class="env-metric"><div class="small muted">&gt;1.0µm /m³</div><div id="${{prefix}}_c10" class="env-value">—</div></div>
-                      <div class="env-metric"><div class="small muted">Temp (°C)</div><div id="${{prefix}}_temp" class="env-value">—</div></div>
-                      <div class="env-metric"><div class="small muted">RH (%)</div><div id="${{prefix}}_rh" class="env-value">—</div></div>
-                      <div class="env-metric"><div class="small muted">Pressure (Pa)</div><div id="${{prefix}}_press" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="env-metric-label">&gt;0.3µm /m³</div><div id="${{prefix}}_c03" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="env-metric-label">&gt;0.5µm /m³</div><div id="${{prefix}}_c05" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="env-metric-label">&gt;1.0µm /m³</div><div id="${{prefix}}_c10" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="env-metric-label">Temp (°C)</div><div id="${{prefix}}_temp" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="env-metric-label">RH (%)</div><div id="${{prefix}}_rh" class="env-value">—</div></div>
+                      <div class="env-metric"><div class="env-metric-label">Pressure (Pa)</div><div id="${{prefix}}_press" class="env-value">—</div></div>
                     </div>
                     <div id="${{prefix}}_note" class="env-node-note">Waiting for live reading.</div>
                   </div>
