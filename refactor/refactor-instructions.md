@@ -117,7 +117,7 @@ Implement the refactor in this order:
 
 ### Phase 5 — Clean up
 - Remove gt521s_control.py if fully replaced by gt521s_driver.py
-- Update CLAUDE.md with new file structure
+- Update AGENTS.md (the agent instructions) with new file structure
 - Commit to dev branch and open PR
 
 ---
