@@ -82,9 +82,6 @@ made here, update:
 
 1. This GoLab repo.
 2. `bardbox-project-template`.
-3. `bardbox-project-template/docs/BARDBOX_STANDARDS.md`. (Note, 2026-10-01: this file does not exist in
-   `bardbox-project-template`; where these updates should go is an open
-   question for the maintainer.)
 
 If the change alters the BardBox platform/framework standard, update `bardbox`
 as well.
